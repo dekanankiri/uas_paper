@@ -1,0 +1,1366 @@
+---
+title: "Data Mining"
+author: "Sean Gusti Setyawan - 3SD2"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    theme: united
+    highlight: tango
+---
+
+1.  Prinsip Utama: MODEL HARUS JALAN! Jangan buang waktu 1 jam hanya untuk memperbaiki 1 kolom tanggal yang susah di-parsing. Kalau error terus, drop kolom tersebut.
+
+2.  Isolasi Error: Eksekusi chunk satu per satu dari atas. Jika chunk 3C error, data dari chunk 3B masih utuh. Gunakan data 3B untuk lanjut ke tahap modeling.
+
+3.  Cek Tipe Target: Sebelum masuk tahapan Split (Bagian 4), pastikan kolom target klasifikasi sudah bertipe factor.
+
+------------------------------------------------------------------------
+
+# BAGIAN 1: SETUP & IMPORT
+
+**Tujuan:** Memuat paket yang diperlukan dan memasukkan data tanpa kehilangan informasi *missing value* yang tersembunyi (seperti spasi kosong).
+
+```{r 1-setup, message=FALSE, warning=FALSE}
+# 1. Load semua library di awal
+library(tidyverse)   # Manipulasi data (dplyr, tidyr, stringr)
+library(janitor)     # Standardisasi nama kolom (clean_names)
+library(lubridate)   # Parsing dan manipulasi tanggal
+library(caret)       # Framework Machine Learning yang ringkas dan aman untuk ujian
+
+# 2. Pengaturan Environment
+# Matikan format saintifik agar angka seperti pendapatan (Rp 1.500.000) 
+# tidak berubah menjadi 1.5e+06 yang sulit dibaca.
+options(scipen = 999)
+
+# 3. Import Data
+# PENTING: strip.white = FALSE memastikan spasi tersembunyi tidak otomatis terhapus,
+# sehingga bisa terdeteksi sebagai missing value (NA) di tahap selanjutnya.
+# UBAH nama file .csv
+df_raw <- read.csv("uts_data.csv", 
+                   header = TRUE, 
+                   stringsAsFactors = FALSE, 
+                   strip.white = FALSE)
+
+# Tampilkan 5 baris pertama untuk memastikan data berhasil di-load
+head(df_raw,5)
+
+```
+
+### Catatan Penting untuk Bagian 1:
+
+Parameter message=FALSE, warning=FALSE di sebelah {r 1-setup} sangat berguna agar saat mengubah file menjadi HTML/PDF (Knit), laporan tidak dipenuhi oleh teks merah peringatan loading package dari R. Laporan akan terlihat lebih rapi dan profesional.
+
+Jika saat ujian komputer belum memiliki paket tertentu (misalnya muncul error there is no package called 'janitor'), cukup ketik install.packages("janitor") di Console (jangan di dalam chunk Rmd), lalu jalankan ulang chunk di atas.
+
+Jika chunk pertama sudah berhasil dijalankan di RStudio tanpa error dan data sudah masuk ke environment, lanjut ke Bagian 2A dan 2B (Data Understanding) untuk mencari “penyakit” di dalam data tersebut.
+
+------------------------------------------------------------------------
+
+# BAGIAN 2: DATA UNDERSTANDING
+
+Kita pecah menjadi dua agar saat melihat outputnya di RStudio tidak kepanjangan dan membuat pusing.
+
+### 2A. Inspeksi Dimensi & Tipe Data
+
+Tujuan: Mendapatkan helicopter view. Jangan mengubah apa pun di sini.
+
+```{r 2a-inspeksi-dasar}
+# 1. Cek Dimensi Data
+cat("--- Dimensi Data ---\n")
+dim(df_raw)
+
+# 2. Penyakit 4: Penamaan Kolom Tidak Konsisten
+# Lihat apakah ada yang pakai huruf besar, huruf kecil, atau pakai spasi
+cat("\n--- Daftar Nama Kolom Awal ---\n")
+names(df_raw)
+
+# 3. Penyakit 3: Tipe Data Salah
+# Perhatikan! Kolom yang seharusnya angka (misal: Jam Kerja, Pendapatan) 
+# apakah tertulis "chr" (character) di sini? Jika ya, berarti kotor.
+cat("\n--- Struktur dan Tipe Data Awal ---\n")
+str(df_raw)
+```
+
+Berdasarkan inspeksi struktur awal, dataset mentah memiliki dimensi sebesar [...Sebutkan angka baris, misal: 10.000...] observasi dan [...Sebutkan angka kolom, misal: 10...] variabel. Terdapat isu inkonsistensi pada penamaan kolom awal yang masih menggunakan format kombinasi huruf besar, huruf kecil, serta penggunaan underscore (\_), seperti pada variabel [...Sebut Variabelnya...]
+
+Selain itu, pengecekan tipe data menunjukkan adanya anomali pada variabel [...Sebutkan nama kolom, misal: Gender ...] yang seharusnya bertipe kategorik, namun terbaca oleh sistem sebagai teks (character) sehingga perlu dikonversi menjadi tipe faktor (factor) agar sesuai untuk proses analisis statistik maupun pemodelan klasifikasi.
+
+### 2B. Deteksi Missing Value "Kotor"
+
+Tujuan: Mencari tahu penyakit data. Biasanya banyak sel berisi "-", "?", atau spasi " " yang membuat tipe data numerik terbaca sebagai karakter.
+
+```{r 2b-deteksi-kotoran}
+# Load library tambahan untuk merapikan output
+library(knitr)
+library(pander)
+
+cat("=== LAPORAN AUDIT KUALITAS DATA ===\n\n")
+
+# 1. Deteksi Missing Value dengan Visualisasi Tabel
+cat("1. Sebaran Missing Value (Terselubung & NA):\n")
+cek_missing_kotor <- function(x) {
+  sum(trimws(x) == "" | trimws(x) == "-" | trimws(x) == "?" | is.na(x))
+}
+
+missing_summary <- data.frame(
+  Kolom = names(df_raw),
+  Jumlah_Missing = sapply(df_raw, cek_missing_kotor)
+)
+# Menggunakan kable untuk tabel yang bersih
+print(kable(missing_summary, col.names = c("Nama Kolom", "Total Missing"), align = "lc"))
+
+# 2. Format Tanggal (Cukup ambil 5 sampel unik)
+cat("\n2. Sampel Format Tanggal:\n")
+sample_tgl <- head(unique(df_raw$tgl_lahir), 5)
+print(sample_tgl)
+
+# 3. Kategori dengan Persentase (Lebih informatif)
+cat("\n3. Analisis Frekuensi Kategori:\n")
+cat("- Status Nikah:\n")
+print(kable(as.data.frame(table(Status = df_raw$statusNikah, useNA = "ifany"))))
+
+cat("\n- Pendidikan:\n")
+
+
+# 4. Statistik Deskriptif (Fokus pada kolom Numerik saja agar tidak berantakan)
+cat("\n4. Ringkasan Statistik Kolom Numerik (Deteksi Outlier):\n")
+df_numeric <- df_raw %>% select(where(is.numeric))
+pander(summary(df_numeric))
+
+```
+
+Eksplorasi lebih mendalam terhadap kualitas data (Data Quality Assessment) menunjukkan bahwa dataset relatif bersih, namun masih ditemukan beberapa permasalahan yang perlu ditangani sebelum proses analisis dan pemodelan dilakukan.
+
+Pertama, hasil pengecekan missing value menunjukkan tidak ditemukan missing value terselubung berupa karakter spasi, tanda strip (-), maupun string kosong pada sebagian besar variabel. Namun, terdapat missing value aktual pada variabel [...Sebutkan kolomnya, misal: Term dan Credit_History....] sebanyak [...Sebutkan jumlahnya, misal: 13 dan 48...] baris.
+
+Kedua, variabel tanggal ([Sebutkan nama kolom, misal: tgl_lahir]) memiliki format yang tidak konsisten dan mengandung salah ketik (contoh: [Sebutkan temuan di layar, misal: penulisan 'meui' atau 'fen']).
+
+Ketiga, pengecekan nilai unik pada variabel kategorik menemukan adanya kode di luar standar, seperti nilai [...Sebutkan nilainya, misal: 2.7...] pada variabel [Sebutkan kolomnya, misal: statusNikah].
+
+Terakhir, dari ringkasan statistik, terindikasi adanya outlier atau inkonsistensi logis pada variabel numerik. Hal ini terlihat dari nilai yang ditunjukkan oleh nilai minimum/maksimum yang tidak wajar, seperti [....Sebutkan keanehannya, misal: Dependents yang mencapai 7 tanggungan, nilai minimum Loan_Amount sebesar 0, serta rentang nilai Applicant_Income dan Coapplicant_Inc yang sangat besar dibandingkan nilai kuartilnya...]."
+
+Oleh karena itu, sebelum masuk ke tahap pemodelan klasifikasi, dilakukan proses Data Preprocessing yang meliputi standardisasi nama kolom, konversi tipe data kategorik menjadi faktor (factor), penghapusan karakter non-numerik, perbaikan format tanggal, serta konversi seluruh missing value terselubung menjadi format standar NA.[... Hapus yang tidak perlu ...]
+
+### Cara Kerja Chunk Ini Saat Ujian:
+
+Kamu TIDAK PERLU merapikan apa pun di Bagian 2 ini. Tujuan chunk ini hanya untuk menampilkan teks di layar komputer agar kamu bisa menganalisis:
+
+(contoh) \* "Oh, ternyata kolom pendapatan itu dibaca sebagai character karena ada spasi dan 'Rp'." \* "Oh, tanggal lahirnya ada yang ditulis 'meui', 'fen', 'agt'." \* "Oh, di status nikah ada yang isinya spasi kosong."
+
+------------------------------------------------------------------------
+
+# BAGIAN 3: DATA PREPROCESSING (AREA RAWAN ERROR)
+
+### 3A. Standarisasi Nama Kolom,TIPE DATA, & Drop Kolom Fatal
+
+Tujuan: Menyeragamkan nama kolom menjadi huruf kecil dan membuang kolom yang tidak relevan (seperti ID).
+
+```{r 3a-format-kolom}
+# BAGIAN 3A: STANDARISASI KOLOM
+
+# 1. Seragamkan semua nama kolom jadi huruf kecil (janitor)
+df_clean <- df_raw %>% clean_names()
+
+# 2. Drop kolom identitas atau kolom teks bebas yang terlalu hancur
+# TODO SAAT UJIAN: Ganti 'id_rt', 'no_art' dengan kolom ID di soal ujian.
+
+# df_clean <- df_clean %>%
+#  select(-id_rt, -no_art) 
+ df_clean <- df_clean %>%
+   select(-no_sampel)
+
+cat("--- Nama Kolom Setelah Distandarisasi ---\n")
+names(df_clean)
+
+```
+
+Langkah pertama pada tahap preprocessing data adalah melakukan standardisasi nama kolom menggunakan format huruf kecil agar konsisten dan menghindari error akibat perbedaan penulisan (case-sensitive).
+
+Selanjutnya, dilakukan proses Feature Selection (seleksi fitur) secara manual dengan membuang variabel identitas, yaitu [...Sebutkan nama kolom yang dihapus, misal: no_sampel...].
+
+Penghapusan kolom ini diperlukan karena variabel identitas tidak memiliki informasi prediktif yang relevan terhadap target klasifikasi. Selain itu, keberadaan variabel ID dapat menyebabkan model mempelajari pola yang tidak bermakna dan berpotensi menimbulkan bias pada proses pemodelan.
+
+### 3B. Sapu Bersih NA & Koreksi Manual Spesifik
+
+Tujuan: Mengubah bentuk sel kosong menjadi NA dan memperbaiki nilai ketikan yang salah atau tidak logis secara manual (seperti desimal pada kode kategori).
+
+```{r 3b-handling-na-koreksi}
+# BAGIAN 3B: SAPU BERSIH NILAI KOTOR & KOREKSI MANUAL
+
+# 1. KOREKSI MANUAL (STEP 2B)
+# TODO SAAT UJIAN: Jika ada nilai kategori yang typo/tidak wajar 
+# (misal: status nikah 2.7), perbaiki di sini sebelum diubah jadi Factor.
+
+# if("statusnikah" %in% names(df_clean)) {
+#   df_clean$statusnikah[df_clean$statusnikah == "2.7"] <- "3"
+# }
+
+# 2. FUNGSI SAPU JAGAT MISSING VALUE
+bersihkan_na <- function(x) {
+  if(is.character(x)) {
+    x <- trimws(x) 
+     x[x == "" |
+      x == "-" |
+      x == "?" |
+      x == "." |
+      tolower(x) == "na"] <- NA
+  }
+  return(x)
+}
+
+# Terapkan ke seluruh dataframe
+df_clean[] <- lapply(df_clean, bersihkan_na)
+
+cat("--- Cek Jumlah NA per Kolom Setelah Pembersihan ---\n")
+colSums(is.na(df_clean))
+```
+
+Dilakukan koreksi manual terhadap nilai anomali atau kesalahan penulisan pada data, seperti mengembalikan nilai [...Sebutkan temuan aneh, misal: 2.7...] pada variabel [...Sebutkan variabelnya, misal: statusNikah...] menjadi kategori yang valid.
+
+Selanjutnya dilakukan proses pembersihan missing value terselubung menggunakan fungsi khusus untuk mengubah berbagai bentuk data kosong, seperti string kosong (""), spasi, tanda strip (-), tanda tanya (?), tanda titik (.), maupun teks "NA" menjadi format missing value standar, yaitu NA.
+
+Berdasarkan hasil proses pembersihan data, diketahui bahwa variabel [...Sebutkan kolom yang paling banyak NA-nya, misal: credit_history...] ternyata memiliki missing value tertinggi, yaitu sebanyak [...Sebutkan jumlah NA-nya, misal: 13...] observasi. [...Klo bisa sebutin semua missing valuenya...]
+
+### 3C. Type Casting & Parsing Tanggal (PALING RAWAN)
+
+TIPS DARURAT: Jika proses tanggal error saat ujian, blok atau hapus kode tanggalnya, lalu buang kolom tanggalnya. Machine learning sering kali tidak membutuhkan data tanggal.
+
+```{r 3c-casting-tipe}
+# BAGIAN 3C: TYPE CASTING & PARSING DATE
+
+# 1. TYPE CASTING UNTUK ANGKA (Membuang "Rp", ".", ",")
+# TODO SAAT UJIAN: Ganti 'applicant_income' dengan nama kolom angka di soal
+
+kolom_numerik <- c(
+  "applicant_income",
+  "coapplicant_inc",
+  "loan_amount",
+  "term",
+  "dependents"
+)
+
+for(kol in kolom_numerik){
+
+  if(kol %in% names(df_clean)){
+
+    df_clean[[kol]] <- as.numeric(
+      gsub("[^0-9.-]", "", df_clean[[kol]])
+    )
+  }
+}
+# 2. TYPE CASTING TARGET KATEGORIK (WAJIB JADI FACTOR)
+# TODO SAAT UJIAN: Ganti 'gender' dengan nama kolom yg mau diubah ke kategorik/factor di soal
+
+kolom_factor <- c(
+  "gender",
+  "married",
+  "education",
+  "self_employed",
+  "area",
+  "credit_history"
+)
+
+for(kol in kolom_factor){
+
+  if(kol %in% names(df_clean)){
+
+    df_clean[[kol]] <- as.factor(df_clean[[kol]])
+  }
+}
+
+# 3. TYPE CASTING TARGET KLASIFIKASI (WAJIB JADI FACTOR)
+# TODO SAAT UJIAN: Ganti 'status' dengan variabel Y yang mau diprediksi!
+target_col <- "status" 
+if(target_col %in% names(df_clean)) {
+  df_clean[[target_col]] <- as.factor(df_clean[[target_col]])
+}
+
+# 4. PARSING TANGGAL (Opsional, rawan error)
+# TODO SAAT UJIAN: Ganti 'tgl_lahir' sesuai soal.
+if("tgl_lahir" %in% names(df_clean)) {
+  df_clean <- df_clean %>%
+    mutate(
+      tgl_clean = tolower(tgl_lahir),
+      tgl_clean = str_replace_all(tgl_clean, "meui", "mei"),
+      tgl_clean = str_replace_all(tgl_clean, "\\bfen\\b", "feb"),
+      tgl_clean = str_replace_all(tgl_clean, "agt", "agus"),
+      # Parsing pintar lubridate
+      tgl_final = parse_date_time(tgl_clean, orders = c("dmy", "mdy", "ymd"))
+    ) %>%
+    select(-tgl_lahir, -tgl_clean) # Buang kolom tanggal yang kotor
+}
+
+cat("--- Struktur Data Setelah Casting ---\n")
+str(df_clean)
+```
+
+Tahap Type Casting (penyesuaian tipe data) dilakukan agar struktur data sesuai dengan kebutuhan analisis statistik dan asumsi matematis algoritma Machine Learning.
+
+Variabel Variabel numerik seperti [...Sebutkan kolom angka yang tadinya kotor, misal: dependents, applicant_income, coapplicant_inc, loan_amount, dan term...] telah dibersihkan dari karakter non-numerik dan dikonversi murni menjadi tipe numeric agar dapat diproses dalam perhitungan matematis dan pemodelan.
+
+Sementara itu, variabel kategorik seperti [...Sebutkan kolom kategorik yang belum sesuai, misal: dgender, married, education, self_employed, area, dan credit_history...] dikonversi menjadi tipe factor untuk merepresentasikan kategori data secara tepat di dalam sistem R.
+
+Secara krusial, variabel target [...Sebutkan nama kolom target, misal: status...] telah dikonversi menjadi tipe Factor. Langkah ini merupakan syarat penting agar algoritma Machine Learning dan fungsi pada paket caret mengenali permasalahan yang dianalisis sebagai kasus klasifikasi (classification problem), bukan sebagai regresi numerik.
+
+### 3D. Persiapan Ketat untuk Machine Learning (Imputasi Omit)
+
+Tujuan: Algoritma machine learning akan crash jika ada NA. Kita harus memastikan data 100% lengkap tanpa nilai kosong.
+
+```{r 3d-imputasi-final}
+# BAGIAN 3D: FINALISASI & AMANKAN DARI NA UNTUK MODEL ML
+
+# 1. WAJIB: 
+# Buang baris jika variabel TARGET (Y) adalah NA.
+# (model klasifikasi tidak bisa tanpa label)
+df_clean <- df_clean %>% filter(!is.na(!!sym(target_col)))
+
+# 2. UBAH SISA KARAKTER MENJADI FACTOR (Syarat Caret)
+# Caret butuh semua variabel kategori berupa Factor, bukan Character.
+# (pengaman tambahan sudah dilakukan 3C)
+df_clean <- df_clean %>% mutate_if(is.character, as.factor)
+
+# 3a. PENANGANAN NA PREDIKTOR (listwise deletion)
+# Saat ujian, cara paling AMAN dan CEPAT agar model tidak crash adalah membuang 
+# baris yang mengandung NA (listwise deletion). 
+# Jika instruksi dosen meminta imputasi, hapus baris na.omit() di bawah, 
+# lalu gunakan preProcess dari caret di Bagian 4 nanti.
+
+# df_final <- na.omit(df_clean)
+
+# 3a. IMPUTASI VARIABEL NUMERIK (MEDIAN)
+# 'term' ganti dengan variabel yang ada missing valuenya
+# TERM -> median
+if("term" %in% names(df_clean)) {
+  df_clean$term[
+    is.na(df_clean$term)
+  ] <- median(df_clean$term, na.rm = TRUE)
+}
+
+# 3b. IMPUTASI VARIABEL KATEGORIK (MODUS)
+# 'credit history' ganti dengan variabel yang ada missing valuenya
+# CREDIT_HISTORY -> modus
+modus <- function(x){
+  names(sort(table(x), decreasing = TRUE))[1]
+}
+
+if("credit_history" %in% names(df_clean)) {
+  df_clean$credit_history[
+    is.na(df_clean$credit_history)
+  ] <- modus(df_clean$credit_history)
+}
+
+# 4. DATA FINAL
+df_final <- df_clean
+
+cat("--- Pengecekan Akhir Missing Value ---\n")
+colSums(is.na(df_final))
+
+cat("\n--- Struktur Final Dataset ---\n")
+str(df_final)
+```
+
+Pada tahap finalisasi praproses data, seluruh variabel kategorik yang masih bertipe character dikonversi menjadi tipe factor untuk memastikan kompatibilitas penuh dengan algoritma Machine Learning pada paket caret. Langkah ini penting karena sebagian besar algoritma klasifikasi, seperti Decision Tree, Random Forest, Support Vector Machine (SVM), dan Logistic Regression, mengharuskan variabel kategorik direpresentasikan dalam bentuk factor agar dapat diproses dengan benar.
+
+Selanjutnya, dilakukan penanganan missing value menggunakan metode imputasi agar jumlah observasi tetap terjaga dan tidak terjadi kehilangan informasi penting pada data pelatihan. Variabel numerik [...term...] diimputasi menggunakan nilai median, sedangkan variabel kategorik [...credit_history....] diimputasi menggunakan nilai modus. Pendekatan ini dipilih karena lebih sesuai untuk dataset berukuran sedang dan mampu mempertahankan stabilitas model klasifikasi.
+
+Hasil pengecekan akhir menunjukkan bahwa dataset telah bersih sepenuhnya tanpa nilai missing (0 NA) sehingga siap digunakan pada tahap pemodelan Machine Learning.
+
+Dataset final (df_final) yang digunakan untuk proses pelatihan model memiliki dimensi sebesar [....Sebutkan jumlah baris dari df_final, misal: 584...] observasi dan [...Sebutkan jumlah kolom dari df_final, misal: 12...] setelah kolom identitas [...no_sampel...] dihapus dari proses analisis.
+
+------------------------------------------------------------------------
+
+# BAGIAN 4: PEMODELAN KLASIFIKASI DENGAN CARET
+
+### TABEL 1: CARA MEMILIH ALGORITMA (ALASAN TEKNIS & BISNIS)
+
+Gunakan tabel ini sebagai acuan jika ditanya dosen, “Kenapa memakai algoritma ini?”
+
+Decision Tree Cocok digunakan ketika membutuhkan model yang mudah dijelaskan dan divisualisasikan, misalnya aturan keputusan seperti “Jika umur \> 30 maka berisiko”. Kelemahan: rentan overfitting dan akurasinya sering kalah dibanding model ensemble. Scaling: Tidak perlu.
+
+Random Forest Cocok digunakan ketika fokus utama adalah akurasi tinggi dan data cukup kompleks atau tidak seimbang (imbalanced). Kelemahan: sulit diinterpretasikan karena terdiri dari banyak pohon keputusan (black-box). Scaling: Tidak perlu.
+
+XGBoost Cocok digunakan ketika membutuhkan performa prediksi sangat tinggi atau untuk kompetisi data mining. Kelemahan: parameter cukup kompleks dan membutuhkan proses tuning. Scaling: Tidak perlu.
+
+Naive Bayes Cocok digunakan untuk data kategorik, teks, atau kuesioner dengan proses training sangat cepat. Kelemahan: asumsi independensi antarvariabel sering tidak realistis. Scaling: Tidak perlu.
+
+K-Nearest Neighbor (KNN) Cocok digunakan ketika klasifikasi didasarkan pada kemiripan antarobservasi. Kelemahan: lambat pada dataset besar dan sensitif terhadap outlier. Scaling: Wajib.
+
+Support Vector Machine (SVM) Radial Cocok digunakan untuk pola data non-linear dan batas klasifikasi yang kompleks. Kelemahan: komputasi berat pada dataset besar dan sulit diinterpretasikan. Scaling: Wajib.
+
+Feed Forward Neural Network (FFNN) Cocok digunakan untuk mempelajari hubungan kompleks antara input dan output menggunakan jaringan saraf sederhana. Kelemahan: sulit dijelaskan dan rawan terjebak pada local minima. Scaling: Wajib (normalisasi/scaling).
+
+Radial Basis Function Neural Network (RBFNN) Cocok digunakan ketika data membentuk kelompok atau klaster tertentu. Kelemahan: sensitif terhadap pemilihan pusat klaster dan parameter radius. Scaling: Wajib (normalisasi/scaling).
+
+Deep Learning Cocok digunakan untuk data sangat besar dan pola yang sangat kompleks. Kelemahan: membutuhkan komputasi tinggi, waktu training lama, dan sulit diinterpretasikan (black-box). Scaling: Wajib (normalisasi/scaling).
+
+------------------------------------------------------------------------
+
+### 4A. Diagnostik Data & Sistem Pakar Rekomendasi
+
+Tujuan: Mendiagnosis kelayakan teknis data dan memberikan argumen bisnis untuk memilih algoritma.
+
+```{r 4a-rekomendasi-model}
+# ==============================================================================
+# BAGIAN 4A: SISTEM PAKAR REKOMENDASI ALGORITMA
+# ==============================================================================
+
+if(!target_col %in% names(df_final)) {
+  stop("target_col tidak ditemukan di df_final.")
+}
+
+n_rows <- nrow(df_final)
+
+x_data <- df_final %>% select(-all_of(target_col))
+
+prediktor_numerik <- sum(sapply(x_data, is.numeric))
+prediktor_kategorik <- sum(sapply(x_data, function(x) {
+  is.factor(x) || is.character(x) || is.logical(x)
+}))
+
+tabel_target <- table(df_final[[target_col]], useNA = "no")
+
+if(length(tabel_target) < 2) {
+  stop("Target hanya memiliki satu kelas. Modeling klasifikasi tidak valid.")
+}
+
+proporsi_target <- prop.table(tabel_target)
+rasio_imbalance <- max(tabel_target) / min(tabel_target)
+
+status <- ifelse(rasio_imbalance < 2, "Seimbang", "Imbalance")
+
+cat("========================================================\n")
+cat(" HASIL DIAGNOSTIK DATA UNTUK MODELING\n")
+cat("========================================================\n")
+cat(sprintf("Total Observasi : %d Baris\n", n_rows))
+cat(sprintf("Fitur/Prediktor : %d Numerik, %d Kategorik\n", 
+            prediktor_numerik, prediktor_kategorik))
+cat(sprintf("Rasio Target    : 1 : %.1f (%s)\n", 
+            rasio_imbalance, status))
+cat("--------------------------------------------------------\n")
+
+# 1. SELEKSI TEKNIS
+algoritma_lulus <- c("Decision Tree", "Random Forest", "XGBoost")
+
+if(prediktor_kategorik > 0) {
+  algoritma_lulus <- c(algoritma_lulus, "Naive Bayes")
+}
+
+if(prediktor_numerik > 0) {
+  if(n_rows <= 5000) {
+    algoritma_lulus <- c(algoritma_lulus, "KNN", "SVM", "FFNN", "RBFNN")
+  } else {
+    cat("[!] INFO TEKNIS: Data >5000 baris. KNN/SVM/RBFNN berpotensi lebih lambat.\n")
+  }
+}
+
+if(n_rows >= 5000 && prediktor_numerik > 0) {
+  algoritma_lulus <- c(algoritma_lulus, "Deep Learning")
+}
+
+cat("\n A. REKOMENDASI TEKNIS (AMAN DIEKSEKUSI)\n")
+for(algo in unique(algoritma_lulus)) {
+  cat(paste(" -", algo, "\n"))
+}
+
+# 2. PANDUAN TUJUAN BISNIS / ANALISIS
+cat("\n B. PANDUAN PEMILIHAN BERDASARKAN TUJUAN BISNIS\n")
+
+if("Decision Tree" %in% algoritma_lulus) {
+  cat("[1] Interpretasi/Kebijakan (White-Box) -> Pilih DECISION TREE.\n")
+}
+
+if("Random Forest" %in% algoritma_lulus) {
+  cat("[2] Akurasi Stabil & Robust -> Pilih RANDOM FOREST.\n")
+}
+
+if("XGBoost" %in% algoritma_lulus) {
+  cat("[3] Akurasi Tinggi dengan Tuning -> Pilih XGBOOST.\n")
+}
+
+if(status == "Imbalance") {
+  cat("[!] Catatan: Target imbalance. Gunakan class weight, resampling, atau metrik F1/Recall/AUC.\n")
+}
+
+if("Naive Bayes" %in% algoritma_lulus) {
+  cat("[4] Cepat & Cocok untuk Fitur Kategorik/Teks -> Pilih NAIVE BAYES.\n")
+}
+
+if("KNN" %in% algoritma_lulus) {
+  cat("[5] Rekomendasi Berdasarkan Kemiripan -> Pilih KNN, wajib scaling.\n")
+}
+
+if("SVM" %in% algoritma_lulus) {
+  cat("[6] Batas Keputusan Non-linear -> Pilih SVM RADIAL, wajib scaling.\n")
+}
+
+if("FFNN" %in% algoritma_lulus) {
+  cat("[7] Jaringan Syaraf Sederhana:\n")
+  cat("    - FFNN : Untuk pola non-linear umum.\n")
+  cat("    - RBFNN: Untuk pola berbasis pusat/cluster lokal.\n")
+}
+
+if("Deep Learning" %in% algoritma_lulus) {
+  cat("[8] Deep Learning: Cocok untuk data besar dan pola sangat kompleks.\n")
+}
+
+cat("========================================================\n")
+```
+
+Data terdiri dari [...584...] baris dengan rasio target [...isi rasio, misal: 1:2.2...] (...[Pilih: Seimbang / Imbalanced]...). Oleh karena itu, saya memilih algoritma [...Sebutkan Algoritma...] karena [Alasan inti: misal, sangat kuat untuk data imbalanced / peraturannya mudah diinterpretasi].
+
+[CONTOH]: Data terdiri dari 584 baris dengan rasio target 1 : 2.2 (Imbalanced). Oleh karena itu, saya memilih algoritma Random Forest karena robust terhadap data yang tidak seimbang, mampu menangani hubungan non-linear antar fitur, serta tidak sensitif terhadap skala data dan cukup stabil terhadap noise.
+
+------------------------------------------------------------------------
+
+### 4B. Pembagian Data & Pengaturan Kontrol (Anti-Leakage)
+
+Tujuan: Membelah data secara stratified dan menyiapkan mesin evaluasi (cross validation + ROC).
+
+Random Split / Holdout Split - Dipakai saat data cukup besar, target relatif seimbang, dan data tidak punya urutan waktu - Contoh: Prediksi harga rumah, prediksi nilai ujian, data pelanggan umum
+
+Stratified Split - Dipakai saat target berupa kelas/kategori dan proporsi tiap kelas harus dijaga di data train dan test - Contoh : Klasifikasi Status = Y/N, fraud Yes/No, penyakit Positif/Negatif, approval pinjaman
+
+Time-Based Split - Dipakai saat data punya urutan waktu, sehingga data masa depan tidak boleh masuk ke training - Contoh : Prediksi saham, penjualan bulanan, cuaca, transaksi harian
+
+```{r 4b-data-splitting}
+# ==============================================================================
+# BAGIAN 4B: DATA SPLITTING & TRAIN CONTROL
+# ==============================================================================
+
+# Pastikan target menjadi factor dengan Y sebagai kelas positif
+df_final[[target_col]] <- factor(df_final[[target_col]], levels = c("Y", "N"))
+
+set.seed(123) # KUNCI AMAN: Agar hasil split tidak berubah-ubah
+rasio_split <- 0.80 
+
+# ==============================================================================
+# PILIHAN 1: RANDOM SPLIT / HOLDOUT SPLIT
+# Dipakai jika data besar, target seimbang, dan tidak ada urutan waktu
+# ==============================================================================
+
+# index_train <- sample(
+#   1:nrow(df_final),
+#   size = rasio_split * nrow(df_final)
+# )
+# 
+# data_train <- df_final[index_train, ]
+# data_test  <- df_final[-index_train, ]
+
+
+# ==============================================================================
+# PILIHAN 2: STRATIFIED SPLIT
+# Dipakai untuk klasifikasi agar proporsi kelas target di train dan test tetap seimbang
+# Cocok untuk kasus Status = Y / N
+# ==============================================================================
+
+index_train <- createDataPartition(
+  y = df_final[[target_col]], 
+  p = rasio_split, 
+  list = FALSE
+)
+
+data_train <- df_final[index_train, ]
+data_test  <- df_final[-index_train, ]
+
+
+# ==============================================================================
+# PILIHAN 3: TIME-BASED SPLIT
+# Dipakai jika data memiliki kolom waktu/tanggal
+# Data lama untuk training, data terbaru untuk testing
+# ==============================================================================
+
+# date_col <- "Tanggal" # Ganti sesuai nama kolom tanggal
+# 
+# df_final <- df_final[order(df_final[[date_col]]), ]
+# 
+# batas <- floor(rasio_split * nrow(df_final))
+# 
+# data_train <- df_final[1:batas, ]
+# data_test  <- df_final[(batas + 1):nrow(df_final), ]
+
+
+# ==============================================================================
+# CEK DIMENSI DATA
+# ==============================================================================
+cat(sprintf("Dimensi Train : %d baris\nDimensi Test  : %d baris\n", 
+            nrow(data_train), nrow(data_test)))
+
+
+# ==============================================================================
+# TRAIN CONTROL UNTUK CROSS VALIDATION
+# ==============================================================================
+
+# Otomatis deteksi fungsi summary: Binary vs Multiclass
+if(length(levels(df_final[[target_col]])) == 2) {
+  fungsi_summary <- twoClassSummary   
+} else {
+  fungsi_summary <- multiClassSummary 
+}
+
+ctrl <- trainControl(
+  method = "cv", 
+  number = 5,
+  classProbs = TRUE, 
+  summaryFunction = fungsi_summary
+  # sampling = "up" # UNCOMMENT jika data imbalance dan ingin ditangani otomatis
+)
+```
+
+Dataset dibagi menjadi Data Latih dan Data Uji dengan rasio [...misal: 80:20...] menggunakan metode [...Stratified Split...].
+
+Selanjutnya, proses pelatihan model dilakukan menggunakan [...misal: 5...]-fold Cross-Validation. Teknik ini membagi data latih menjadi 5 bagian secara bergantian untuk proses training dan validasi, sehingga performa model dapat dievaluasi dengan lebih stabil, objektif, dan mengurangi risiko overfitting.
+
+------------------------------------------------------------------------
+
+### 4C. Menu Prasmanan Algoritma
+
+Petunjuk: Hanya jalankan (run) chunk algoritma yang diminta oleh dosen.
+
+```{r 4c-setup-rumus}
+# Rumus general (Target ~ Semua Variabel)
+rumus_model <- as.formula(paste(target_col, "~ ."))
+```
+
+Model dibangun menggunakan formula matematis [Sebutkan nama target, misal: status_miskin]
+
+#### Menu 1: Decision Tree (rpart)
+
+```{r 4c-model-dt, warning=FALSE}
+set.seed(123)
+model_dt <- train(rumus_model, data = data_train, method = "rpart", trControl = ctrl, tuneLength = 5)
+print(model_dt)
+```
+
+Berdasarkan tuning model Decision Tree, parameter kompleksitas optimal yang dipilih adalah cp = [...isi angka, misal: 0 ...] dengan nilai ROC = [...isi angka, misal: 0.7087634...]. Nilai ini memberikan keseimbangan terbaik antara ukuran pohon keputusan dan akurasi prediksi, sehingga pohon tidak terlalu rumit (overfitting) namun tetap akurat.
+
+[Contoh:] Berdasarkan tuning model Decision Tree, parameter kompleksitas optimal yang dipilih adalah cp = 0, karena menghasilkan nilai ROC tertinggi sebesar 0.7087634 pada 5-fold Cross-Validation. Nilai ini menunjukkan bahwa model terbaik diperoleh dengan pemangkasan minimum pada pohon keputusan, sehingga perlu dilakukan evaluasi lanjutan pada data uji untuk memastikan performanya tetap stabil.
+
+#### Menu 2: Naive Bayes (nb)
+
+```{r 4c-model-nb, warning=FALSE}
+# install.packages("klaR")
+set.seed(123)
+
+x_train <- data_train[, names(data_train) != target_col]
+y_train <- data_train[[target_col]]
+
+model_nb <- train(
+  x = x_train,
+  y = y_train,
+  method = "nb",
+  trControl = ctrl,
+  tuneLength = 3
+)
+
+print(model_nb)
+```
+
+Hasil tuning model Naive Bayes menunjukkan performa maksimal pada kombinasi parameter fL = [...isi angka, misal: 0....], usekernel = [...TRUE/FALSE...], dan adjust = [...isi angka, misal: 1...] pada proses 5-fold Cross-Validation. dengan nilai ROC sebesar [...isi angka, misal: 0.7202702...]. Hal ini menunjukkan bahwa distribusi data [pilih: membutuhkan / tidak membutuhkan] smoothing (penghalusan) tambahan untuk menangani probabilitas nol.
+
+Nilai fL = 0 menunjukkan bahwa model tidak menggunakan Laplace smoothing tambahan, sedangkan usekernel = FALSE menunjukkan bahwa model tidak menggunakan estimasi kernel density.
+
+#### Menu 3: K-Nearest Neighbors (kknn)
+
+```{r 4c-model-knn, warning=FALSE}
+# install.packages("kknn")
+set.seed(123)
+model_knn <- train(rumus_model, data = data_train, method = "kknn", 
+                   trControl = ctrl, preProcess = c("center", "scale", "nzv"), tuneLength = 5)
+print(model_knn)
+```
+
+Pada pemodelan KNN, model terbaik diperoleh saat menggunakan batas tetangga terdekat kmax = [...isi angka, misal: 13...] dengan fungsi jarak distance = [...isi angka, misal: 2...] dan pembobotan kernel = [...isi nama kernel, misal: optimal...]. Artinya, model membuat keputusan kelas yang paling stabil dengan melihat mayoritas dari [sebutkan angka kmax (13)] tetangga terdekatnya.
+
+#### Menu 4: Support Vector Machine (svmRadial)
+
+```{r 4c-model-svm, warning=FALSE}
+set.seed(123)
+model_svm <- train(rumus_model, data = data_train, method = "svmRadial", 
+                   trControl = ctrl, preProcess = c("center", "scale", "nzv"), tuneLength = 3)
+print(model_svm)
+```
+
+Pemodelan SVM dengan kernel Radial mencapai performa puncak pada nilai rentang sigma = [...isi angka, misal: 0.08490675...] dan penalti kesalahan C (Cost) = [...isi angka, misal: 0.5...]. Kombinasi ini berhasil membentuk hyperplane (batas kelas) yang optimal tanpa membuat batas tersebut terlalu kaku terhadap outlier.
+
+#### Menu 5: Feed-Forward Neural Network (FFNN - nnet)
+
+# Awas Meletup
+
+```{r 4c-model-ffnn, warning=FALSE, message=FALSE}
+set.seed(123)
+model_ffnn <- train(rumus_model, data = data_train, method = "nnet", 
+                    trControl = ctrl, preProcess = "range", # Min-Max Scaling (0 s.d 1)
+                    tuneLength = 3, trace = FALSE, maxit = 500, MaxNWts = 10000)
+print(model_ffnn)
+```
+
+Jaringan Syaraf Tiruan FFNN menemukan arsitektur terbaiknya pada size = [isi angka, misal: 5] hidden units dengan nilai penalti bobot decay = [isi angka, misal: 0.1]. Arsitektur ini cukup kompleks untuk memetakan pola non-linear pada data, sementara nilai decay mencegah bobot neuron menjadi terlalu besar (overfitting).
+
+#### Menu 6: Radial Basis Function Neural Network (RBFNN - rbf)
+
+# Awas Meletup
+
+```{r 4c-model-rbfnn, warning=FALSE, message=FALSE}
+# install.packages("RSNNS") # WAJIB DI-INSTALL UNTUK RBFNN
+set.seed(123)
+model_rbfnn <- train(rumus_model, data = data_train, method = "rbf", 
+                     trControl = ctrl, preProcess = "range", tuneLength = 3)
+print(model_rbfnn)
+```
+
+Model RBFNN mengunci performa tertinggi dengan jumlah fungsi basis radial size = [isi angka, misal: 3]. Ini mengindikasikan bahwa data uji berhasil dipetakan secara lokal ke dalam [sebutkan angka size] titik pusat penyebaran yang representatif untuk membedakan kelas target.
+
+#### Menu 7: Deep Learning (dnn)
+
+# Awas Meletup
+
+```{r 4c-model-dnn, warning=FALSE, message=FALSE}
+# install.packages("deepnet") # WAJIB DI-INSTALL UNTUK DEEP LEARNING
+set.seed(123)
+model_dnn <- train(rumus_model, data = data_train, method = "dnn", 
+                   trControl = ctrl, preProcess = "range", tuneLength = 3, numepochs = 50)
+print(model_dnn)
+```
+
+Pemodelan Deep Learning menghasilkan arsitektur ideal dengan konfigurasi neuron pada hidden layer pertama, kedua, dan ketiga secara berturut-turut adalah [sebut angka layer1], [sebut angka layer2], dan [sebut angka layer3]. Tingkat dropout sebesar [sebut angka dropout]% diterapkan untuk mematikan sebagian neuron secara acak guna menghindari model menghafal data (overfitting)
+
+#### Menu 8: Random Forest (rf) & XGBoost (xgbTree)
+
+```{r 4c-model-ensembles-rf, warning=FALSE, message=FALSE}
+# --- RANDOM FOREST ---
+set.seed(123)
+model_rf <- train(rumus_model, data = data_train, method = "rf", trControl = ctrl, tuneLength = 3)
+print(model_rf)
+```
+
+Pada metode Ensemble Random Forest, model paling andal dibentuk menggunakan mtry = [...isi angka, misal: 11....]. Ini berarti dari total prediktor yang ada, sistem mengekstrak [sebutkan angka mtry] variabel secara acak pada setiap percabangan pohon untuk menjaga agar ratusan pohon yang dibangun tetap bervariasi dan tidak bias.
+
+# Awas Meletup
+
+```{r 4c-model-ensembles-xgb, warning=FALSE, message=FALSE}
+# --- XGBOOST ---
+# install.packages("xgboost")
+
+set.seed(123)
+
+# Pastikan target factor dan Y sebagai kelas positif
+data_train[[target_col]] <- factor(data_train[[target_col]], levels = c("Y", "N"))
+
+# Pisahkan prediktor dan target
+x_train <- data_train[, names(data_train) != target_col]
+y_train <- data_train[[target_col]]
+
+# Ubah semua prediktor kategorik menjadi dummy/numerik
+dummy_xgb <- dummyVars(~ ., data = x_train, fullRank = TRUE)
+
+x_train_xgb <- predict(dummy_xgb, newdata = x_train)
+x_train_xgb <- as.data.frame(x_train_xgb)
+
+# Amankan nama kolom
+names(x_train_xgb) <- make.names(names(x_train_xgb), unique = TRUE)
+
+# Cek dan tangani missing value jika ada
+pre_xgb <- preProcess(x_train_xgb, method = c("medianImpute"))
+x_train_xgb <- predict(pre_xgb, x_train_xgb)
+
+# Buang variabel near-zero variance jika ada
+nzv <- nearZeroVar(x_train_xgb)
+
+if(length(nzv) > 0) {
+  x_train_xgb <- x_train_xgb[, -nzv]
+}
+
+# Control khusus XGBoost
+# Catatan: pakai Accuracy agar tidak error ROC NA
+ctrl_xgb <- trainControl(
+  method = "cv",
+  number = 5,
+  classProbs = FALSE,
+  summaryFunction = defaultSummary,
+  savePredictions = "final",
+  allowParallel = FALSE
+)
+
+# Grid tuning ringan
+grid_xgb <- expand.grid(
+  nrounds = c(50, 100),
+  max_depth = c(2, 3),
+  eta = c(0.05, 0.1),
+  gamma = 0,
+  colsample_bytree = 0.8,
+  min_child_weight = 1,
+  subsample = 0.8
+)
+
+# Train XGBoost
+set.seed(123)
+
+model_xgb <- train(
+  x = x_train_xgb,
+  y = y_train,
+  method = "xgbTree",
+  trControl = ctrl_xgb,
+  tuneGrid = grid_xgb,
+  metric = "Accuracy",
+  verbose = FALSE
+)
+
+print(model_xgb)
+```
+
+#### Cek XGBoost (xgbTree)
+
+```{r}
+table(y_train)
+levels(y_train)
+
+sum(is.na(x_train_xgb))
+sum(!is.finite(as.matrix(x_train_xgb)))
+
+str(x_train_xgb)
+warnings()
+
+sum(is.na(x_train_xgb))
+```
+
+Dari serangkaian penalaan hyperparameter pada XGBoost, performa maksimal diraih menggunakan iterasi pohon sebanyak nrounds = [isi angka], dengan kedalaman maksimal pohon max_depth = [isi angka], dan learning rate eta = [isi angka]. Kombinasi ini memungkinkan algoritma mengoreksi kesalahan pada tebakan sebelumnya secara bertahap namun akurat.
+
+# BAGIAN 5: EVALUASI MODEL & CONFUSION MATRIX
+
+### 5A. Sistem Pakar Rekomendasi Metrik Evaluasi
+
+Tujuan: Mendiagnosis postur data test dan memberikan argumen metrik mana yang paling cocok untuk dicetak berdasarkan tujuan analisis.
+
+```{r 5a-rekomendasi-metrik}
+# 1. Ekstrak Karakteristik Data Test
+tabel_test <- table(data_test[[target_col]])
+prop_test <- prop.table(tabel_test)
+imbalance_test <- max(tabel_test) / min(tabel_test)
+kelas_positif_saran <- levels(data_test[[target_col]])[1]
+
+cat("========================================================\n")
+cat("HASIL DIAGNOSTIK DATA TEST & REKOMENDASI METRIK\n")
+cat("========================================================\n")
+cat(sprintf("Proporsi Target     : %s\n", paste(round(prop_test * 100, 1), "%", collapse = " vs ")))
+cat(sprintf("Kelas Positif (Y)   : '%s' (Asumsi kelas utama)\n", kelas_positif_saran))
+cat("--------------------------------------------------------\n")
+
+# 2. SARAN TEKNIS (Berdasarkan Imbalance)
+if(imbalance_test < 1.5) {
+  cat("[+] STATUS: DATA SEIMBANG\n")
+  cat("    -> AMAN: Anda bisa menggunakan ACCURACY sebagai patokan utama evaluasi.\n\n")
+} else {
+  cat("[!] STATUS: DATA IMBALANCED\n")
+  cat("    -> BAHAYA: Jangan pamer nilai Accuracy! Bisa menyesatkan.\n")
+  cat("    -> WAJIB: Gunakan F1-SCORE atau COHEN'S KAPPA sebagai patokan utama performa model.\n\n")
+}
+
+# 3. SARAN BISNIS
+cat("PANDUAN PILIH METRIK BERDASARKAN KASUS SOAL:\n")
+cat("[Menu 1] CONFUSION MATRIX: Wajib selalu ditampilkan sebagai fondasi evaluasi.\n")
+cat("[Menu 2] RECALL (SENSITIVITY): Pilih jika kasusnya KRITIKAL (Misal: Deteksi stunting, penyakit parah). Kita benci 'Kecolongan' (False Negative).\n")
+cat("[Menu 3] PRECISION (PPV): Pilih jika 'Salah Tuduh' itu mahal (Misal: Filter Spam, Razia). Kita benci 'Salah Tangkap' (False Positive).\n")
+cat("[Menu 4] KURVA AUC-ROC: Pilih jika dosen meminta visualisasi kemampuan model memisahkan 2 kelas secara keseluruhan tanpa terikat satu threshold.\n")
+cat("========================================================\n")
+```
+
+Berdasarkan diagnostik, proporsi kelas pada data uji adalah [...isi proporsi, misal: 69% vs 31%...] yang berarti data [...pilih: Seimbang / Imbalanced...]. Oleh karena itu, metrik utama yang dijadikan patokan evaluasi adalah [...pilih: Akurasi / F1-Score dan Recall...] agar kesimpulan model tidak menyesatkan.
+
+------------------------------------------------------------------------
+
+### 5B. Persiapan Evaluasi (Pilih Model)
+
+Petunjuk: Di chunk ini, kamu hanya perlu mengetikkan nama variabel model yang ingin kamu periksa (misalnya dari model_dt menjadi model_rf).
+
+```{r 5b-setup-evaluasi}
+# 1. UBAH NAMA MODEL DI SINI SESUAI KEBUTUHAN UJIAN 
+model_dievaluasi <- model_rf   # <--- Ganti dengan model_rf, model_svm, dll
+
+# 2. Tentukan kelas positif (PENTING untuk Recall/Precision)
+kelas_positif <- levels(data_test[[target_col]])[1] 
+
+cat(sprintf("Menyiapkan Evaluasi Untuk Model: %s\n", toupper(model_dievaluasi$method)))
+
+# 3. Mesin otomatis melakukan prediksi ke data test
+# Prediksi label/kelas (Misal: "Miskin", "Kaya")
+pred_class <- predict(model_dievaluasi, newdata = data_test)
+
+# Prediksi probabilitas (Misal: 0.85 Miskin, 0.15 Kaya) - WAJIB untuk Kurva ROC
+pred_prob <- predict(model_dievaluasi, newdata = data_test, type = "prob")
+
+# 4. Membangun objek Confusion Matrix "Sapu Jagat"
+eval_cm <- confusionMatrix(
+  data = pred_class, 
+  reference = data_test[[target_col]], 
+  positive = kelas_positif,
+  mode = "everything" # Otomatis menghitung F1, Precision, dll.
+)
+cat("Data prediksi berhasil dibuat. Silakan pilih Menu di Chunk 5C!\n")
+```
+
+Opsi 1 (Pilih ini JIKA DATA SEIMBANG):
+
+"Berdasarkan Confusion Matrix, model menghasilkan Akurasi = [isi Akurasi \* 100]% dan Kappa = [isi Kappa]. Tingginya nilai Kappa membuktikan bahwa tebakan model memang presisi, bukan karena faktor kebetulan/hoki."
+
+Opsi 2 (Pilih ini JIKA DATA JOMPLANG / KASUS KRITIS):
+
+"Karena data imbalanced, performa difokuskan pada nilai F1-Score = [isi F1] dan Recall = [isi Recall \* 100]%. Tingginya nilai Recall menunjukkan model berhasil mendeteksi sebagian besar target sesungguhnya ([Sebutkan target, misal: Keluarga Miskin]), sehingga risiko 'kecolongan sasaran' sangat minim."
+
+------------------------------------------------------------------------
+
+### 5C. MENU PRASMANAN METRIK EVALUASI
+
+Petunjuk: Hanya run chunk yang informasinya diminta oleh soal atau yang ingin kamu masukkan ke laporan analisis.
+
+#### [Menu 1] Visualisasi & Matriks Dasar (Akurasi & Kappa)
+
+```{r 5c-menu-dasar, fig.width=5, fig.height=5}
+cat("--- 1. RINGKASAN PERFORMA UMUM ---\n")
+cat(sprintf("Accuracy      : %.2f%%\n", eval_cm$overall["Accuracy"] * 100))
+cat(sprintf("Cohen's Kappa : %.4f (Mengukur akurasi tanpa unsur hoki)\n", eval_cm$overall["Kappa"]))
+
+cat("\n--- 2. TABEL CONFUSION MATRIX ---\n")
+print(eval_cm$table)
+
+# Cetak Gambar Visual Anti-Error
+fourfoldplot(
+  eval_cm$table, 
+  color = c("#FF8A8A", "#8AFF8A"), # Merah = Salah, Hijau = Benar
+  conf.level = 0, margin = 1, 
+  main = paste("Confusion Matrix -", toupper(model_dievaluasi$method))
+)
+```
+
+Berdasarkan confusion matrix, model menghasilkan Accuracy sebesar 76,72% dan Cohen’s Kappa sebesar 0,3963. Dari total 116 data uji, model berhasil memprediksi benar sebanyak 89 data, yaitu 73 data kelas Y dan 16 data kelas N. Namun, terdapat 20 data kelas N yang salah diprediksi sebagai Y, serta 7 data kelas Y yang salah diprediksi sebagai N.
+
+Hal ini menunjukkan bahwa model cukup baik dalam mengenali nasabah yang pinjamannya disetujui, tetapi masih memiliki kelemahan dalam mengenali nasabah yang seharusnya ditolak.
+
+#### [Menu 2] Evaluasi Data Jomplang & Kasus Kritis (F1, F-beta, Recall, Precision)
+
+```{r 5c-menu-lanjutan}
+cat("--- METRIK KELAS SPESIFIK (FOKUS PADA DATA IMBALANCED) ---\n")
+cat(sprintf("Fokus Kelas Positif: '%s'\n\n", kelas_positif))
+
+# Ekstrak nilai dasar
+precision <- eval_cm$byClass["Pos Pred Value"]
+recall <- eval_cm$byClass["Sensitivity"]
+
+# Menghitung F-beta Score (F2 dan F0.5) secara otomatis
+f2_score <- (1 + 2^2) * (precision * recall) / ((2^2 * precision) + recall)
+f05_score <- (1 + 0.5^2) * (precision * recall) / ((0.5^2 * precision) + recall)
+
+cat(sprintf("Recall (TPR)  : %.4f (Sensitivity: Mencegah Kecolongan Positif)\n", recall))
+cat(sprintf("Precision (PPV): %.4f (Mencegah Salah Tuduh Positif)\n", precision))
+cat(sprintf("Specificity   : %.4f (TNR: Mampu mengenali kelas negatif)\n", eval_cm$byClass["Specificity"]))
+cat(sprintf("NPV           : %.4f (Yakin bahwa tebakan negatif benar-benar negatif)\n\n", eval_cm$byClass["Neg Pred Value"]))
+
+cat("--- KELUARGA F-SCORE ---\n")
+cat(sprintf("F1-Score      : %.4f (Metrik teraman & seimbang untuk data jomplang)\n", eval_cm$byClass["F1"]))
+cat(sprintf("F2-Score      : %.4f (Lebih condong ke Recall - Pakai untuk medis/kemiskinan)\n", f2_score))
+cat(sprintf("F0.5-Score    : %.4f (Lebih condong ke Precision - Pakai untuk filter/razia)\n", f05_score))
+```
+
+Karena data bersifat imbalanced, evaluasi model difokuskan pada metrik F1-Score dan Recall. Model menghasilkan F1-Score sebesar 0,8439 dan Recall sebesar 91,25%. Nilai Recall yang tinggi menunjukkan bahwa model mampu mendeteksi sebagian besar nasabah yang benar-benar disetujui pinjamannya (Y).
+
+Selain itu, nilai Precision sebesar 0,7849 menunjukkan bahwa sebagian besar prediksi Y yang diberikan model sudah tepat. Namun, nilai Specificity sebesar 0,4444 menunjukkan bahwa model masih kurang optimal dalam mengenali nasabah yang seharusnya ditolak (N).
+
+#### [Menu 3] Visualisasi Kurva ROC & Nilai AUC
+
+*Catatan: ROC sangat direkomendasikan untuk klasifikasi Biner (2 Kelas). Pastikan paket `pROC` sudah ter-install.*
+
+```{r 5c-menu-roc, fig.width=6, fig.height=5, warning=FALSE, message=FALSE}
+# install.packages("pROC") # Buka tanda pagar jika pROC belum ada di PC ujian
+library(pROC)
+
+# Cek apakah target biner (2 kelas), karena ROC standar butuh 2 kelas
+if(length(levels(data_test[[target_col]])) == 2) {
+  
+  # Membuat objek ROC
+  roc_obj <- roc(
+    response = data_test[[target_col]], 
+    predictor = pred_prob[[kelas_positif]]
+  )
+  
+  # Mengambil nilai Area Under Curve (AUC)
+  nilai_auc <- auc(roc_obj)
+  cat(sprintf("Nilai AUC (Area Under Curve): %.4f\n", nilai_auc))
+  cat("Interpretasi AUC: >0.9 (Sangat Baik), >0.8 (Baik), >0.7 (Cukup), <0.6 (Buruk/Gagal)\n")
+  
+  # Menggambar Kurva ROC
+  plot(roc_obj, col = "blue", lwd = 2, 
+       main = paste("Kurva ROC -", toupper(model_dievaluasi$method)),
+       print.auc = TRUE, print.auc.y = 0.4)
+  
+} else {
+  cat("[!] PERINGATAN: Target Anda memiliki lebih dari 2 kelas (Multiclass).\n")
+  cat("Kurva ROC standar tidak bisa digambar langsung. Fokus gunakan Akurasi atau F1-Score Makro.\n")
+}
+```
+
+Berdasarkan hasil evaluasi menggunakan kurva ROC, diperoleh nilai AUC sebesar 0,7326. Nilai ini menunjukkan bahwa model memiliki kemampuan yang cukup baik dalam membedakan nasabah yang pinjamannya disetujui (Y) dan nasabah yang pinjamannya ditolak (N). Karena nilai AUC berada di atas 0,7, performa model dapat dikategorikan cukup, meskipun belum mencapai kategori baik
+
+# Keseluruhaan
+
+Secara keseluruhan, model menunjukkan performa yang cukup baik dengan Accuracy sebesar 76,72%, F1-Score sebesar 0,8439, Recall sebesar 91,25%, dan AUC sebesar 0,7326. Namun, nilai Specificity yang hanya sebesar 0,4444 menunjukkan bahwa model masih kurang optimal dalam mengenali nasabah yang seharusnya ditolak (N).
+
+# Template
+
+1.  Confusion Matrix
+
+Kapan dipakai? Wajib untuk pembukaan evaluasi (kalau ditanya detail tebakan).
+
+Template Esai: \> "Berdasarkan Confusion Matrix, model berhasil menebak [isi True Positive] kasus benar Positif dan [isi True Negative] kasus benar Negatif. Angka ini menyisakan tingkat kesalahan yang minim, yakni [isi False Positive] kasus salah tuduh (False Positive) dan [isi False Negative] kasus kecolongan (False Negative)."
+
+2.  Accuracy (Akurasi)
+
+Kapan dipakai? HANYA jika data seimbang (50:50).
+
+Template Esai: \> "Akurasi model mencapai [isi Akurasi \* 100]%, yang berarti secara keseluruhan model sukses mengklasifikasikan kelas uji dengan benar. Tingginya angka ini valid dijadikan patokan utama karena proporsi data target seimbang."
+
+3.  Precision (PPV - Positive Predictive Value)
+
+Kapan dipakai? Jika biaya salah sasaran/salah tuduh sangat mahal (Misal: Filter spam, Razia, Bantuan salah sasaran).
+
+Template Esai: \> "Nilai Precision sebesar [isi Precision \* 100]% membuktikan bahwa dari seluruh data yang ditebak Positif oleh model, tingkat kebenarannya sangat tinggi. Model ini sangat direkomendasikan untuk meminimalisir pemborosan anggaran akibat kasus salah sasaran (False Positive)."
+
+4.  Recall / Sensitivity / TPR (True Positive Rate)
+
+Kapan dipakai? Jika "Kecolongan" itu sangat berbahaya (Misal: Deteksi stunting, warga miskin ekstrem, penyakit).
+
+Template Esai: \> "Tingginya nilai Recall sebesar [isi Recall \* 100]% menunjukkan bahwa model sukses melacak dan menangkap hampir seluruh target Positif asli di lapangan. Model ini sangat efektif untuk mencegah bahaya 'kecolongan' target (False Negative)."
+
+5.  Specificity / TNR (True Negative Rate)
+
+Kapan dipakai? Saat kelas "Negatif" juga sama pentingnya untuk dikenali dengan benar.
+
+Template Esai: \> "Nilai Specificity sebesar [isi Specificity \* 100]% mengonfirmasi ketajaman model dalam mengenali observasi kelas Negatif, sehingga tidak ada target aman yang tidak sengaja terklasifikasi sebagai bahaya."
+
+6.  NPV (Negative Predictive Value)
+
+Kapan dipakai? Untuk menjamin kebenaran dari keputusan "Aman/Negatif" (Misal: Tes bebas penyakit).
+
+Template Esai: \> "Nilai NPV mencapai [isi NPV \* 100]%, yang memberikan jaminan/garansi tinggi bahwa apabila model memprediksi suatu observasi masuk ke kelas Negatif, maka prediksi tersebut sangat dapat dipercaya."
+
+7.  F1-Score
+
+Kapan dipakai? Metrik PALING AMAN dan WAJIB untuk data jomplang (imbalanced).
+
+Template Esai: \> "Mengakomodasi ketimpangan (imbalance) kelas pada data, model dievaluasi menggunakan F1-Score dan mencapai skor [isi F1-Score]. Angka ini merepresentasikan keseimbangan harmonik yang optimal antara Precision dan Recall, membuktikan ketangguhan model secara komprehensif."
+
+8.  F-beta Score (F2 & F0.5)
+
+Kapan dipakai? Versi advance dari F1-Score jika dosen memberi kasus sangat spesifik.
+
+Template Esai F2 (Kasus Pro-Recall/Medis): \> "Metrik F2-Score mencapai [isi F2], yang membuktikan bahwa model sangat sensitif dan waspada terhadap target kritis dengan memberikan penalti lebih berat pada setiap kasus yang tidak terdeteksi."
+
+Template Esai F0.5 (Kasus Pro-Precision/Investasi): \> "Metrik F0.5-Score mencapai [isi F0.5], yang mengonfirmasi sikap kehati-hatian model sebelum membuat prediksi Positif demi menekan kerugian akibat salah tuduh."
+
+9.  Cohen's Kappa (κ)
+
+Kapan dipakai? Selalu bagus disandingkan dengan Akurasi sebagai bukti modelmu pintar, bukan hoki.
+
+Template Esai: \> "Nilai Kappa sebesar [isi Kappa] memastikan bahwa kesuksesan akurasi model murni berasal dari kemampuan deteksi algoritmanya, bukan akibat tebakan peluang yang kebetulan benar (chance agreement)."
+
+10. AUC-ROC (Area Under the Receiver Operating Characteristic)
+
+Kapan dipakai? Kalau dosen meminta performa visual atau penilaian independen (tanpa threshold potong).
+
+Template Esai: \> "Skor AUC-ROC mencatatkan angka sebesar [isi AUC]. Skor superior ini menegaskan tingginya daya pisah model, yang secara konsisten mampu membedakan antara kelas Positif dan kelas Negatif di berbagai skenario probabilitas."
+
+# BAGIAN 6: VARIABLE IMPORTANCE (FAKTOR PALING BERPENGARUH)
+
+### 6A. Menentukan Variabel Paling Penting
+
+Petunjuk: Chunk ini akan otomatis mengambil model yang sedang kamu evaluasi di Bagian 5B dan mencari tahu variabel mana yang kontribusinya paling besar.
+
+```{r 6a-variable-importance, fig.width=7, fig.height=5}
+# ==============================================================================
+# BAGIAN 6: VARIABLE IMPORTANCEL
+# ==============================================================================
+cat(sprintf("Mencetak Variable Importance untuk Model: %s\n", toupper(model_dievaluasi$method)))
+cat("--------------------------------------------------------\n")
+
+# Menghitung tingkat kepentingan (skala 0 - 100)
+var_imp <- varImp(model_dievaluasi, scale = TRUE)
+
+# Menampilkan angka di layar
+print(var_imp)
+
+# Menggambar grafik (Ambil top 10 saja agar rapi)
+plot(var_imp, top = 10, 
+     main = paste("Top 10 Variabel Paling Berpengaruh -", toupper(model_dievaluasi$method)))
+```
+
+"Berdasarkan evaluasi Variable Importance, fitur utama yang paling dominan dalam memengaruhi prediksi [...Sebutkan nama target, misal: status persetujuan pinjaman... ] adalah variabel [...credit_history1...] (skor mutlak 100%), yang secara kuat disusul oleh [...Sebutkan Variabel Peringkat 2...] dan [...Sebutkan Variabel Peringkat 3...]."
+
+"Rekomendasi Kebijakan: Secara teknis, keputusan model sangat dipengaruhi oleh riwayat kredit, pendapatan pemohon, dan jumlah pinjaman yang diajukan. Oleh karena itu, bank perlu memprioritaskan pemeriksaan riwayat kredit nasabah, evaluasi kemampuan membayar berdasarkan pendapatan, serta penyesuaian jumlah pinjaman agar sesuai dengan kapasitas finansial nasabah. Dengan memperhatikan faktor-faktor utama tersebut, bank dapat membuat keputusan persetujuan pinjaman yang lebih akurat serta mengurangi risiko pemberian pinjaman kepada nasabah yang berpotensi gagal bayar.
+
+# BAGIAN 7. PREDIKSI DATA BARU & EXPORT HASIL
+
+### 7A. Import Data Prediksi
+
+Fungsi chunk ini: membaca file `uts_predik.csv` dan mengecek struktur awalnya.
+
+```{r 7a-import-data-prediksi}
+# ==============================================================================
+# BAGIAN 7A: IMPORT DATA PREDIKSI BARU
+# ==============================================================================
+
+data_predik_raw <- read.csv("uts_predik.csv", stringsAsFactors = FALSE)
+
+cat("--- DIMENSI DATA PREDIKSI ---\n")
+print(dim(data_predik_raw))
+
+cat("\n--- NAMA KOLOM DATA PREDIKSI ---\n")
+print(names(data_predik_raw))
+
+cat("\n--- STRUKTUR DATA PREDIKSI ---\n")
+str(data_predik_raw)
+
+cat("\n--- CEK MISSING VALUE DATA PREDIKSI ---\n")
+print(colSums(is.na(data_predik_raw)))
+```
+
+### 7B. Standarisasi Nama Kolom dan Simpan ID
+
+Fungsi chunk ini: menyamakan nama kolom dan menghapus `no_sampel` dari data yang masuk ke model.
+
+```{r}
+# Simpan no_sampel untuk output akhir
+id_predik <- data_predik_raw$no_sampel
+
+# Samakan format nama kolom seperti df_final
+data_predik <- data_predik_raw %>%
+  clean_names()
+
+cat("--- NAMA KOLOM SETELAH CLEAN_NAMES ---\n")
+print(names(data_predik))
+
+# Hapus kolom no_sampel karena bukan prediktor model
+if("no_sampel" %in% names(data_predik)) {
+  data_predik_model <- data_predik %>% select(-no_sampel)
+} else {
+  data_predik_model <- data_predik
+}
+
+cat("\n--- NAMA KOLOM UNTUK MODEL ---\n")
+print(names(data_predik_model))
+```
+
+### 7C. Samakan Kolom dengan Data Training
+
+Fungsi chunk ini: memastikan kolom `uts_predik.csv` sama dengan kolom prediktor pada `df_final`.
+
+```{r 7c-samakan-kolom}
+# ==============================================================================
+# BAGIAN 7C: SAMAKAN KOLOM DATA PREDIKSI DENGAN DATA TRAINING
+# ==============================================================================
+
+# Ambil nama prediktor dari df_final
+kolom_prediktor <- setdiff(names(df_final), target_col)
+
+# Cek apakah ada kolom yang kurang
+kolom_kurang <- setdiff(kolom_prediktor, names(data_predik_model))
+
+# Cek apakah ada kolom tambahan
+kolom_lebih <- setdiff(names(data_predik_model), kolom_prediktor)
+
+cat("--- KOLOM YANG KURANG ---\n")
+print(kolom_kurang)
+
+cat("\n--- KOLOM TAMBAHAN ---\n")
+print(kolom_lebih)
+
+# Kalau ada kolom yang kurang, hentikan proses
+if(length(kolom_kurang) > 0) {
+  stop("Ada kolom prediktor yang tidak ditemukan di data_predik_model.")
+}
+
+# Kalau ada kolom tambahan, buang kolom tersebut
+if(length(kolom_lebih) > 0) {
+  data_predik_model <- data_predik_model[, !(names(data_predik_model) %in% kolom_lebih)]
+}
+
+# Urutkan kolom agar sama persis dengan df_final
+data_predik_model <- data_predik_model[, kolom_prediktor]
+
+cat("\n--- URUTAN KOLOM FINAL DATA PREDIKSI ---\n")
+print(names(data_predik_model))
+```
+
+### 7D. Samakan Tipe Data
+
+Fungsi chunk ini: menyamakan tipe data prediksi dengan data training.\
+Misalnya `gender`, `married`, `area`, dan `credit_history` harus menjadi `factor`.
+
+```{r 7d-samakan-tipe-data}
+# ==============================================================================
+# BAGIAN 7D: SAMAKAN TIPE DATA DENGAN DF_FINAL
+# ==============================================================================
+
+for(kolom in names(data_predik_model)) {
+  
+  # Jika kolom di df_final adalah factor, maka data prediksi juga dibuat factor
+  if(is.factor(df_final[[kolom]])) {
+    data_predik_model[[kolom]] <- factor(
+      data_predik_model[[kolom]],
+      levels = levels(df_final[[kolom]])
+    )
+  }
+  
+  # Jika kolom di df_final adalah numeric, maka data prediksi juga dibuat numeric
+  if(is.numeric(df_final[[kolom]])) {
+    data_predik_model[[kolom]] <- as.numeric(data_predik_model[[kolom]])
+  }
+}
+
+cat("--- STRUKTUR DATA PREDIKSI SETELAH CASTING ---\n")
+str(data_predik_model)
+
+cat("\n--- CEK MISSING VALUE SETELAH CASTING ---\n")
+print(colSums(is.na(data_predik_model)))
+```
+
+### 7E. Imputasi Missing Value
+
+Fungsi chunk ini: mengisi missing value pada data prediksi.
+
+```{r 7e-imputasi-data-prediksi}
+# ==============================================================================
+# BAGIAN 7E: IMPUTASI MISSING VALUE DATA PREDIKSI
+# ==============================================================================
+
+# Fungsi modus untuk data kategorik
+modus <- function(x) {
+  ux <- na.omit(unique(x))
+  ux[which.max(tabulate(match(x, ux)))]
+}
+
+for(kolom in names(data_predik_model)) {
+  
+  if(any(is.na(data_predik_model[[kolom]]))) {
+    
+    # Jika numerik, isi NA dengan median dari df_final
+    if(is.numeric(data_predik_model[[kolom]])) {
+      data_predik_model[[kolom]][is.na(data_predik_model[[kolom]])] <- 
+        median(df_final[[kolom]], na.rm = TRUE)
+    }
+    
+    # Jika factor/kategorik, isi NA dengan modus dari df_final
+    if(is.factor(data_predik_model[[kolom]])) {
+      nilai_modus <- modus(df_final[[kolom]])
+      
+      data_predik_model[[kolom]][is.na(data_predik_model[[kolom]])] <- 
+        as.character(nilai_modus)
+      
+      data_predik_model[[kolom]] <- factor(
+        data_predik_model[[kolom]],
+        levels = levels(df_final[[kolom]])
+      )
+    }
+  }
+}
+
+cat("--- CEK MISSING VALUE SETELAH IMPUTASI ---\n")
+print(colSums(is.na(data_predik_model)))
+
+cat("\n--- STRUKTUR FINAL DATA PREDIKSI ---\n")
+str(data_predik_model)
+```
+
+### BAGIAN 7F: LATIH ULANG MODEL FINAL DENGAN SELURUH DATA
+
+Fungsi chunk ini: melatih ulang model final menggunakan seluruh data \`uts_data.csv.
+
+Kenapa dilatih ulang?\
+Karena setelah model terbaik dipilih, model final sebaiknya belajar dari semua data historis, bukan hanya `data_train`.
+
+```{r 7f-latih-model-final}
+# ==============================================================================
+# BAGIAN 7F: LATIH ULANG MODEL FINAL DENGAN SELURUH DATA
+# ==============================================================================
+
+set.seed(123)
+
+# Pastikan target tetap factor dengan Y sebagai kelas positif
+df_final[[target_col]] <- factor(df_final[[target_col]], levels = c("Y", "N"))
+
+# Rumus model
+rumus_model <- as.formula(paste(target_col, "~ ."))
+
+# Model final menggunakan Random Forest
+# Dipilih karena sebelumnya memiliki performa ROC terbaik
+model_final <- train(
+  rumus_model,
+  data = df_final,
+  method = "rf",
+  trControl = ctrl,
+  tuneLength = 3,
+  metric = "ROC"
+)
+
+print(model_final)
+```
+
+### BAGIAN 7G: PREDIKSI STATUS DATA BARU
+
+```{r 7g-prediksi-data-baru}
+# ==============================================================================
+# BAGIAN 7G: PREDIKSI STATUS DATA BARU
+# ==============================================================================
+
+# Cek apakah kolom data prediksi sudah sama dengan data training
+kolom_prediktor <- setdiff(names(df_final), target_col)
+
+cat("--- CEK KESESUAIAN KOLOM ---\n")
+cat("Jumlah kolom data prediksi :", ncol(data_predik_model), "\n")
+cat("Jumlah kolom prediktor     :", length(kolom_prediktor), "\n\n")
+
+if(!all(names(data_predik_model) == kolom_prediktor)) {
+  stop("Urutan/nama kolom data_predik_model belum sama dengan df_final.")
+}
+
+# Prediksi status Y/N
+prediksi_status <- predict(
+  model_final,
+  newdata = data_predik_model
+)
+
+cat("--- HASIL PREDIKSI STATUS ---\n")
+print(prediksi_status)
+
+cat("\n--- DISTRIBUSI HASIL PREDIKSI ---\n")
+print(table(prediksi_status))
+```
+
+### BAGIAN 7H: EXPORT HASIL PREDIKSI KE CSV
+
+```{r 7h-export-hasil-prediksi}
+# ==============================================================================
+# BAGIAN 7H: EXPORT HASIL PREDIKSI KE CSV
+# ==============================================================================
+
+# Tambahkan hasil prediksi ke data asli uts_predik.csv
+hasil_output <- data_predik_raw
+
+hasil_output$Status <- prediksi_status
+
+cat("--- PREVIEW HASIL OUTPUT ---\n")
+print(head(hasil_output))
+
+cat("\n--- DIMENSI HASIL OUTPUT ---\n")
+print(dim(hasil_output))
+
+# GANTI NIM DI SINI
+nama_file_output <- "utsdatmin_222312994.csv"
+
+write.csv(
+  hasil_output,
+  file = nama_file_output,
+  row.names = FALSE
+)
+
+cat(sprintf("\nFile hasil prediksi berhasil dibuat: %s\n", nama_file_output))
+```

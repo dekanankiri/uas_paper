@@ -1,0 +1,2 @@
+"0","# Rumus general (Target ~ Semua Variabel)"
+"0","rumus_model <- as.formula(paste(target_col, ""~ .""))"

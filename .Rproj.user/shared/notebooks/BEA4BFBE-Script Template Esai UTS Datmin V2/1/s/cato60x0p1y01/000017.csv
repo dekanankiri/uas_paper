@@ -1,0 +1,19 @@
+"0",""
+"0","# 2. Format Tanggal (Cukup ambil 5 sampel unik)"
+"0","cat(""\n2. Sampel Format Tanggal:\n"")"
+"1","
+2. Sampel Format Tanggal:
+"
+"0","sample_tgl <- head(unique(df_raw$tgl_lahir), 5)"
+"0","print(sample_tgl)"
+"1","NULL
+"
+"0","# 3. Kategori dengan Persentase (Lebih informatif)"
+"0","cat(""\n3. Analisis Frekuensi Kategori:\n"")"
+"1","
+3. Analisis Frekuensi Kategori:
+"
+"0","cat(""- Status Nikah:\n"")"
+"1","- Status Nikah:
+"
+"0","print(kable(as.data.frame(table(Status = df_raw$statusNikah, useNA = ""ifany""))))"

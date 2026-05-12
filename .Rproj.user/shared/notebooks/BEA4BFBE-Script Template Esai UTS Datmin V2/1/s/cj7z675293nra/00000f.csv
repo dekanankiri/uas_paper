@@ -1,0 +1,59 @@
+"0","# 1. Ekstrak Karakteristik Data Test"
+"0","tabel_test <- table(data_test[[target_col]])"
+"0","prop_test <- prop.table(tabel_test)"
+"0","imbalance_test <- max(tabel_test) / min(tabel_test)"
+"0","kelas_positif_saran <- levels(data_test[[target_col]])[1]"
+"0",""
+"0","cat(""========================================================\n"")"
+"1","========================================================
+"
+"0","cat(""HASIL DIAGNOSTIK DATA TEST & REKOMENDASI METRIK\n"")"
+"1","HASIL DIAGNOSTIK DATA TEST & REKOMENDASI METRIK
+"
+"0","cat(""========================================================\n"")"
+"1","========================================================
+"
+"0","cat(sprintf(""Proporsi Target     : %s\n"", paste(round(prop_test * 100, 1), ""%"", collapse = "" vs "")))"
+"1","Proporsi Target     : 69 % vs 31 %
+"
+"0","cat(sprintf(""Kelas Positif (Y)   : '%s' (Asumsi kelas utama)\n"", kelas_positif_saran))"
+"1","Kelas Positif (Y)   : 'Y' (Asumsi kelas utama)
+"
+"0","cat(""--------------------------------------------------------\n"")"
+"1","--------------------------------------------------------
+"
+"0","# 2. SARAN TEKNIS (Berdasarkan Imbalance)"
+"0","if(imbalance_test < 1.5) {"
+"0","  cat(""[+] STATUS: DATA SEIMBANG\n"")"
+"0","  cat(""    -> AMAN: Anda bisa menggunakan ACCURACY sebagai patokan utama evaluasi.\n\n"")"
+"0","} else {"
+"0","  cat(""[!] STATUS: DATA IMBALANCED\n"")"
+"0","  cat(""    -> BAHAYA: Jangan pamer nilai Accuracy! Bisa menyesatkan.\n"")"
+"0","  cat(""    -> WAJIB: Gunakan F1-SCORE atau COHEN'S KAPPA sebagai patokan utama performa model.\n\n"")"
+"0","}"
+"1","[!] STATUS: DATA IMBALANCED
+"
+"1","    -> BAHAYA: Jangan pamer nilai Accuracy! Bisa menyesatkan.
+"
+"1","    -> WAJIB: Gunakan F1-SCORE atau COHEN'S KAPPA sebagai patokan utama performa model.
+
+"
+"0","# 3. SARAN BISNIS"
+"0","cat(""PANDUAN PILIH METRIK BERDASARKAN KASUS SOAL:\n"")"
+"1","PANDUAN PILIH METRIK BERDASARKAN KASUS SOAL:
+"
+"0","cat(""[Menu 1] CONFUSION MATRIX: Wajib selalu ditampilkan sebagai fondasi evaluasi.\n"")"
+"1","[Menu 1] CONFUSION MATRIX: Wajib selalu ditampilkan sebagai fondasi evaluasi.
+"
+"0","cat(""[Menu 2] RECALL (SENSITIVITY): Pilih jika kasusnya KRITIKAL (Misal: Deteksi stunting, penyakit parah). Kita benci 'Kecolongan' (False Negative).\n"")"
+"1","[Menu 2] RECALL (SENSITIVITY): Pilih jika kasusnya KRITIKAL (Misal: Deteksi stunting, penyakit parah). Kita benci 'Kecolongan' (False Negative).
+"
+"0","cat(""[Menu 3] PRECISION (PPV): Pilih jika 'Salah Tuduh' itu mahal (Misal: Filter Spam, Razia). Kita benci 'Salah Tangkap' (False Positive).\n"")"
+"1","[Menu 3] PRECISION (PPV): Pilih jika 'Salah Tuduh' itu mahal (Misal: Filter Spam, Razia). Kita benci 'Salah Tangkap' (False Positive).
+"
+"0","cat(""[Menu 4] KURVA AUC-ROC: Pilih jika dosen meminta visualisasi kemampuan model memisahkan 2 kelas secara keseluruhan tanpa terikat satu threshold.\n"")"
+"1","[Menu 4] KURVA AUC-ROC: Pilih jika dosen meminta visualisasi kemampuan model memisahkan 2 kelas secara keseluruhan tanpa terikat satu threshold.
+"
+"0","cat(""========================================================\n"")"
+"1","========================================================
+"

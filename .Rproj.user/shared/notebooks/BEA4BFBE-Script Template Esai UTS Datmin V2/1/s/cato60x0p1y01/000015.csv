@@ -1,0 +1,22 @@
+"0","# Load library tambahan untuk merapikan output"
+"0","library(knitr)"
+"0","library(pander)"
+"0",""
+"0","cat(""=== LAPORAN AUDIT KUALITAS DATA ===\n\n"")"
+"1","=== LAPORAN AUDIT KUALITAS DATA ===
+
+"
+"0","# 1. Deteksi Missing Value dengan Visualisasi Tabel"
+"0","cat(""1. Sebaran Missing Value (Terselubung & NA):\n"")"
+"1","1. Sebaran Missing Value (Terselubung & NA):
+"
+"0","cek_missing_kotor <- function(x) {"
+"0","  sum(trimws(x) == """" | trimws(x) == ""-"" | trimws(x) == ""?"" | is.na(x))"
+"0","}"
+"0",""
+"0","missing_summary <- data.frame("
+"0","  Kolom = names(df_raw),"
+"0","  Jumlah_Missing = sapply(df_raw, cek_missing_kotor)"
+"0",")"
+"0","# Menggunakan kable untuk tabel yang bersih"
+"0","print(kable(missing_summary, col.names = c(""Nama Kolom"", ""Total Missing""), align = ""lc""))"

@@ -1,0 +1,53 @@
+"0",""
+"0","cat(""\n- Pendidikan:\n"")"
+"1","
+- Pendidikan:
+"
+"0","# 4. Statistik Deskriptif (Fokus pada kolom Numerik saja agar tidak berantakan)"
+"0","cat(""\n4. Ringkasan Statistik Kolom Numerik (Deteksi Outlier):\n"")"
+"1","
+4. Ringkasan Statistik Kolom Numerik (Deteksi Outlier):
+"
+"0","df_numeric <- df_raw %>% select(where(is.numeric))"
+"0","pander(summary(df_numeric))"
+"1","
+---------------------------------------------------------------------
+   no_sampel       Dependents     Applicant_Income   Coapplicant_Inc 
+--------------- ---------------- ------------------ -----------------
+  Min.  : 1.0    Min.  :0.0000     Min.  : 15000        Min.  : 0    
+
+ 1st Qu.:151.8   1st Qu.:0.0000   1st Qu.: 288050      1st Qu.: 0    
+
+ Median :308.5   Median :0.0000   Median : 378750    Median : 112850 
+
+  Mean :307.5     Mean :0.8818     Mean : 529299      Mean : 162728  
+
+ 3rd Qu.:463.2   3rd Qu.:2.0000   3rd Qu.: 575450    3rd Qu.: 227700 
+
+ Max.  :614.0    Max.  :7.0000     Max.  :6333700    Max.  :4166700  
+
+      NA               NA                NA                NA        
+---------------------------------------------------------------------
+
+Table: Table continues below
+
+ 
+---------------------------------------------------
+   Loan_Amount          Term        Credit_History 
+------------------ --------------- ----------------
+    Min.  : 0       Min.  : 36.0    Min.  :0.0000  
+
+ 1st Qu.: 9800000   1st Qu.:360.0   1st Qu.:1.0000 
+
+ Median :12500000   Median :360.0   Median :1.0000 
+
+  Mean :14054452     Mean :343.1     Mean :0.8451  
+
+ 3rd Qu.:16500000   3rd Qu.:360.0   3rd Qu.:1.0000 
+
+ Max.  :70000000    Max.  :480.0    Max.  :1.0000  
+
+        NA            NA's :13         NA's :48    
+---------------------------------------------------
+
+"

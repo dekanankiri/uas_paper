@@ -1,0 +1,3 @@
+"0","# Menggambar grafik (Ambil top 10 saja agar rapi)"
+"0","plot(var_imp, top = 10, "
+"0","     main = paste(""Top 10 Variabel Paling Berpengaruh -"", toupper(model_dievaluasi$method)))"
