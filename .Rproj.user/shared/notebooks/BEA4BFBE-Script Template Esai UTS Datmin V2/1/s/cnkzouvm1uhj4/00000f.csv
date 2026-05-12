@@ -1,4 +1,0 @@
-"0","# 1. UBAH NAMA MODEL DI SINI SESUAI KEBUTUHAN UJIAN "
-"0","model_dievaluasi <- model_rf   # <--- Ganti dengan model_rf, model_svm, dll"
-"2","Error: object 'model_rf' not found
-"

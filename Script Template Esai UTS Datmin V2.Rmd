@@ -876,7 +876,7 @@ Petunjuk: Di chunk ini, kamu hanya perlu mengetikkan nama variabel model yang in
 
 ```{r 5b-setup-evaluasi}
 # 1. UBAH NAMA MODEL DI SINI SESUAI KEBUTUHAN UJIAN 
-model_dievaluasi <- model_rf   # <--- Ganti dengan model_rf, model_svm, dll
+model_dievaluasi <- model_dt   # <--- Ganti dengan model_rf, model_svm, dll
 
 # 2. Tentukan kelas positif (PENTING untuk Recall/Precision)
 kelas_positif <- levels(data_test[[target_col]])[1] 

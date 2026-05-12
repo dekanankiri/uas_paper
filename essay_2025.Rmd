@@ -1,5 +1,342 @@
 ---
-title: "essay_2025"
-output: html_document
+title: "UAS Data Mining - Essay 2025"
+author: "Jawaban Naive Bayes"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    theme: united
+    highlight: tango
 ---
 
+# Soal Tipe 2: Uraian
+
+Tabel berikut merupakan basis data karyawan. Data tersebut telah digeneralisasi. Misalnya, "31 ... 35" untuk atribut usia mewakili rentang usia 31 hingga 35 tahun. Untuk setiap entri baris tertentu, kolom *count* mewakili jumlah karyawan yang memiliki nilai untuk departemen, status, usia, dan gaji yang sesuai dengan karakteristik di baris tersebut.
+
+| departemen | status | usia  | gaji    | count |
+|:-----------|:-------|:------|:--------|:------|
+| sales      | senior | 31-35 | 46K-50K | 30    |
+| sales      | junior | 26-30 | 26K-30K | 40    |
+| sales      | junior | 31-35 | 31K-35K | 40    |
+| systems    | junior | 21-25 | 46K-50K | 20    |
+| systems    | senior | 31-35 | 66K-70K | 5     |
+| systems    | junior | 26-30 | 46K-50K | 3     |
+| systems    | senior | 41-45 | 66K-70K | 3     |
+| marketing  | senior | 36-40 | 46K-50K | 10    |
+| marketing  | junior | 31-35 | 41K-45K | 4     |
+| sekretaris | senior | 46-50 | 36K-40K | 4     |
+
+**Catatan:** atribut **status** menjadi atribut label kelas.
+
+Berdasarkan data training pada tabel tersebut, tentukanlah status dari karyawan yang memiliki karakteristik untuk atribut departemen, usia, dan gaji, berurutan adalah **"systems," "26 ... 30," dan "46K-50K"**. Gunakan metode klasifikasi **Naive Bayes** untuk menentukan status karyawan tersebut!
+
+------------------------------------------------------------------------
+
+# JAWABAN
+
+## BAGIAN 1: SETUP & IMPORT
+
+```{r 1-setup, message=FALSE, warning=FALSE}
+# 1. Load semua library
+library(tidyverse)
+library(caret)
+library(knitr)
+library(klaR)
+library(e1071)
+
+options(scipen = 999)
+
+# 2. Membuat dataframe AGREGAT sesuai tabel soal
+df_agg <- data.frame(
+  departemen = c("sales","sales","sales","systems","systems","systems","systems","marketing","marketing","sekretaris"),
+  status     = c("senior","junior","junior","junior","senior","junior","senior","senior","junior","senior"),
+  usia       = c("31-35","26-30","31-35","21-25","31-35","26-30","41-45","36-40","31-35","46-50"),
+  gaji       = c("46K-50K","26K-30K","31K-35K","46K-50K","66K-70K","46K-50K","66K-70K","46K-50K","41K-45K","36K-40K"),
+  count      = c(30, 40, 40, 20, 5, 3, 3, 10, 4, 4)
+)
+
+cat("=== TABEL DATA AGREGAT ===\n")
+print(kable(df_agg))
+
+# 3. Expand data agregat menjadi data individual (159 baris)
+# Karena kolom count merepresentasikan jumlah karyawan per baris
+df_raw <- df_agg[rep(seq_len(nrow(df_agg)), df_agg$count), 
+                 c("departemen","status","usia","gaji")]
+rownames(df_raw) <- NULL
+
+cat("\n=== DIMENSI DATA SETELAH EXPAND ===\n")
+cat(sprintf("Total baris: %d\n", nrow(df_raw)))
+head(df_raw, 100)
+```
+
+Data tabel soal merupakan data agregat dengan kolom `count`. Agar dapat diproses oleh package `caret`, data harus di-expand menjadi **159 baris individual** (satu baris per karyawan).
+
+------------------------------------------------------------------------
+
+## BAGIAN 2: DATA UNDERSTANDING
+
+```{r 2-understanding}
+cat("=== DIMENSI DATA ===\n")
+dim(df_raw)
+
+cat("\n=== STRUKTUR DATA ===\n")
+str(df_raw)
+
+cat("\n=== DISTRIBUSI KELAS TARGET (status) ===\n")
+table(df_raw$status)
+prop.table(table(df_raw$status))
+
+cat("\n=== DISTRIBUSI PER ATRIBUT ===\n")
+cat("- Departemen:\n")
+table(df_raw$departemen)
+cat("\n- Usia:\n")
+table(df_raw$usia)
+cat("\n- Gaji:\n")
+table(df_raw$gaji)
+```
+
+Dataset terdiri dari **159 observasi** dan **4 variabel** (3 prediktor + 1 target). Distribusi kelas target: **junior = 107** (67.3%) dan **senior = 52** (32.7%).
+
+------------------------------------------------------------------------
+
+## BAGIAN 3: DATA PREPROCESSING
+
+```{r 3-preprocessing}
+# 1. Salin data mentah
+df_clean <- df_raw
+
+# 2. Konversi semua variabel menjadi factor (syarat Naive Bayes untuk data kategorik)
+df_clean$departemen <- as.factor(df_clean$departemen)
+df_clean$usia       <- as.factor(df_clean$usia)
+df_clean$gaji       <- as.factor(df_clean$gaji)
+
+# 3. Konversi target klasifikasi menjadi factor
+target_col <- "status"
+df_clean[[target_col]] <- as.factor(df_clean[[target_col]])
+
+# 4. Cek missing value
+cat("=== CEK MISSING VALUE ===\n")
+colSums(is.na(df_clean))
+
+cat("\n=== STRUKTUR DATA FINAL ===\n")
+str(df_clean)
+
+# 5. Data final siap digunakan
+df_final <- df_clean
+```
+
+Seluruh variabel prediktor (departemen, usia, gaji) dan variabel target (status) dikonversi menjadi tipe **factor**. Tidak ditemukan missing value sehingga data siap digunakan untuk pemodelan.
+
+------------------------------------------------------------------------
+
+## BAGIAN 4: PEMODELAN NAIVE BAYES DENGAN CARET
+
+### 4A. Diagnostik Data
+
+```{r 4a-diagnostik}
+n_rows <- nrow(df_final)
+tabel_target <- table(df_final[[target_col]])
+proporsi_target <- prop.table(tabel_target)
+rasio_imbalance <- max(tabel_target) / min(tabel_target)
+status_balance <- ifelse(rasio_imbalance < 2, "Seimbang", "Imbalance")
+
+cat("========================================================\n")
+cat(" HASIL DIAGNOSTIK DATA UNTUK MODELING\n")
+cat("========================================================\n")
+cat(sprintf("Total Observasi : %d Baris\n", n_rows))
+cat(sprintf("Rasio Target    : 1 : %.1f (%s)\n", rasio_imbalance, status_balance))
+cat("Algoritma Terpilih: NAIVE BAYES\n")
+cat("Alasan: Seluruh fitur bersifat kategorik, cocok untuk Naive Bayes.\n")
+cat("========================================================\n")
+```
+
+Data terdiri dari **159 baris** dengan rasio target **1:2.1 (Imbalance)**. Dipilih algoritma **Naive Bayes** karena seluruh fitur bersifat kategorik dan Naive Bayes sangat cocok untuk data jenis ini.
+
+### 4B. Data Splitting & Train Control
+
+```{r 4b-splitting}
+set.seed(123)
+rasio_split <- 0.80
+
+# Stratified Split agar proporsi kelas target terjaga
+index_train <- createDataPartition(
+  y = df_final[[target_col]],
+  p = rasio_split,
+  list = FALSE
+)
+
+data_train <- df_final[index_train, ]
+data_test  <- df_final[-index_train, ]
+
+cat(sprintf("Dimensi Train : %d baris\nDimensi Test  : %d baris\n",
+            nrow(data_train), nrow(data_test)))
+
+cat("\nProporsi target di TRAIN:\n")
+print(prop.table(table(data_train$status)))
+cat("\nProporsi target di TEST:\n")
+print(prop.table(table(data_test$status)))
+
+# Train Control: 5-fold Cross Validation
+ctrl <- trainControl(
+  method = "cv",
+  number = 5,
+  classProbs = TRUE,
+  summaryFunction = twoClassSummary
+)
+```
+
+Dataset dibagi menjadi data latih dan data uji dengan rasio **80:20** menggunakan metode **Stratified Split**. Proses pelatihan menggunakan **5-fold Cross-Validation** dengan metrik evaluasi **ROC**.
+
+### 4C. Training Model Naive Bayes
+
+```{r 4c-model-nb, warning=FALSE}
+set.seed(123)
+
+# Pisahkan prediktor dan target
+x_train <- data_train[, names(data_train) != target_col]
+y_train <- data_train[[target_col]]
+
+# Training Naive Bayes menggunakan caret
+model_nb <- train(
+  x = x_train,
+  y = y_train,
+  method = "nb",
+  trControl = ctrl,
+  tuneLength = 3
+)
+
+print(model_nb)
+```
+
+Hasil tuning model Naive Bayes menunjukkan kombinasi parameter terbaik yang diperoleh pada proses 5-fold Cross-Validation.
+
+------------------------------------------------------------------------
+
+## BAGIAN 5: EVALUASI & PREDIKSI
+
+### 5A. Evaluasi pada Data Test
+
+```{r 5a-evaluasi, warning=FALSE}
+# Prediksi pada data test
+prediksi_test <- predict(model_nb, newdata = data_test)
+prob_test     <- predict(model_nb, newdata = data_test, type = "prob")
+
+# Confusion Matrix
+cat("=== CONFUSION MATRIX ===\n")
+cm <- confusionMatrix(prediksi_test, data_test$status)
+print(cm)
+```
+
+### 5B. Prediksi Data Baru (Soal)
+
+```{r 5b-prediksi-soal, warning=FALSE}
+# Buat data baru sesuai soal
+data_baru <- data.frame(
+  departemen = factor("systems",    levels = levels(df_final$departemen)),
+  usia       = factor("26-30",      levels = levels(df_final$usia)),
+  gaji       = factor("46K-50K",    levels = levels(df_final$gaji))
+)
+
+cat("=== DATA KARYAWAN BARU ===\n")
+print(data_baru)
+
+# Prediksi kelas
+hasil_prediksi <- predict(model_nb, newdata = data_baru)
+cat("\n=== HASIL PREDIKSI STATUS ===\n")
+cat(sprintf(">> Status: %s\n", as.character(hasil_prediksi)))
+
+# Probabilitas per kelas
+prob_prediksi <- predict(model_nb, newdata = data_baru, type = "prob")
+cat("\n=== PROBABILITAS PER KELAS ===\n")
+print(prob_prediksi)
+
+cat("\n========================================\n")
+cat("  KESIMPULAN KLASIFIKASI\n")
+cat("========================================\n")
+cat(sprintf("Karyawan dengan departemen='systems', usia='26-30', gaji='46K-50K'\n"))
+cat(sprintf(">> Diklasifikasikan sebagai: **%s**\n", toupper(as.character(hasil_prediksi))))
+cat(sprintf(">> Probabilitas Junior: %.4f (%.2f%%)\n", prob_prediksi$junior, prob_prediksi$junior*100))
+cat(sprintf(">> Probabilitas Senior: %.4f (%.2f%%)\n", prob_prediksi$senior, prob_prediksi$senior*100))
+```
+
+------------------------------------------------------------------------
+
+## BAGIAN 6: PERHITUNGAN MANUAL (VERIFIKASI)
+
+Berikut perhitungan manual Naive Bayes sebagai verifikasi terhadap hasil `caret`.
+
+```{r 6-manual}
+cat("========================================\n")
+cat("  VERIFIKASI MANUAL NAIVE BAYES\n")
+cat("========================================\n\n")
+
+# Total data
+total <- nrow(df_final)
+total_senior <- sum(df_final$status == "senior")
+total_junior <- sum(df_final$status == "junior")
+
+# Prior
+P_senior <- total_senior / total
+P_junior <- total_junior / total
+cat(sprintf("P(senior) = %d/%d = %.4f\n", total_senior, total, P_senior))
+cat(sprintf("P(junior) = %d/%d = %.4f\n\n", total_junior, total, P_junior))
+
+# Likelihood per atribut
+# Departemen = systems
+dept_s <- sum(df_final$status == "senior" & df_final$departemen == "systems")
+dept_j <- sum(df_final$status == "junior" & df_final$departemen == "systems")
+cat(sprintf("P(dept=systems | senior) = %d/%d = %.4f\n", dept_s, total_senior, dept_s/total_senior))
+cat(sprintf("P(dept=systems | junior) = %d/%d = %.4f\n\n", dept_j, total_junior, dept_j/total_junior))
+
+# Usia = 26-30
+usia_s <- sum(df_final$status == "senior" & df_final$usia == "26-30")
+usia_j <- sum(df_final$status == "junior" & df_final$usia == "26-30")
+cat(sprintf("P(usia=26-30 | senior) = %d/%d = %.4f  <<< ZERO!\n", usia_s, total_senior, usia_s/total_senior))
+cat(sprintf("P(usia=26-30 | junior) = %d/%d = %.4f\n\n", usia_j, total_junior, usia_j/total_junior))
+
+# Gaji = 46K-50K
+gaji_s <- sum(df_final$status == "senior" & df_final$gaji == "46K-50K")
+gaji_j <- sum(df_final$status == "junior" & df_final$gaji == "46K-50K")
+cat(sprintf("P(gaji=46K-50K | senior) = %d/%d = %.4f\n", gaji_s, total_senior, gaji_s/total_senior))
+cat(sprintf("P(gaji=46K-50K | junior) = %d/%d = %.4f\n\n", gaji_j, total_junior, gaji_j/total_junior))
+
+# Posterior
+post_senior <- P_senior * (dept_s/total_senior) * (usia_s/total_senior) * (gaji_s/total_senior)
+post_junior <- P_junior * (dept_j/total_junior) * (usia_j/total_junior) * (gaji_j/total_junior)
+
+cat("--- POSTERIOR ---\n")
+cat(sprintf("P(senior|X) ∝ %.4f × %.4f × %.4f × %.4f = %.6f\n",
+            P_senior, dept_s/total_senior, usia_s/total_senior, gaji_s/total_senior, post_senior))
+cat(sprintf("P(junior|X) ∝ %.4f × %.4f × %.4f × %.4f = %.6f\n\n",
+            P_junior, dept_j/total_junior, usia_j/total_junior, gaji_j/total_junior, post_junior))
+
+# Tabel Ringkasan
+ringkasan <- data.frame(
+  Probabilitas = c("P(Ci) Prior", "P(dept=systems|Ci)", "P(usia=26-30|Ci)", 
+                    "P(gaji=46K-50K|Ci)", "Posterior"),
+  Senior = c(sprintf("%.4f", P_senior), sprintf("%.4f", dept_s/total_senior),
+             sprintf("%.4f", usia_s/total_senior), sprintf("%.4f", gaji_s/total_senior),
+             sprintf("%.6f", post_senior)),
+  Junior = c(sprintf("%.4f", P_junior), sprintf("%.4f", dept_j/total_junior),
+             sprintf("%.4f", usia_j/total_junior), sprintf("%.4f", gaji_j/total_junior),
+             sprintf("%.6f", post_junior))
+)
+kable(ringkasan, align = "lcc", caption = "Ringkasan Perhitungan Manual Naive Bayes")
+```
+
+------------------------------------------------------------------------
+
+## Kesimpulan
+
+Berdasarkan metode klasifikasi **Naive Bayes** menggunakan package `caret`, karyawan dengan karakteristik:
+
+-   **Departemen** = systems
+-   **Usia** = 26–30
+-   **Gaji** = 46K–50K
+
+Diklasifikasikan sebagai **JUNIOR**.
+
+**Alasan:** Dalam perhitungan manual, $P(\text{usia}=26\text{-}30 \mid \text{senior}) = 0$ karena tidak ada karyawan senior yang berusia 26–30 tahun di data training. Akibatnya, seluruh posterior untuk kelas senior menjadi nol (*zero-frequency problem*). Sementara posterior kelas junior bernilai positif karena seluruh atribut memiliki frekuensi yang mendukung.
+
+> **Catatan:** Package `caret` dengan method `nb` secara internal menggunakan **Laplace Smoothing** (fL parameter) yang dapat mengatasi *zero-frequency problem*. Namun, baik dengan maupun tanpa smoothing, hasilnya tetap konsisten: **JUNIOR**.

@@ -1,0 +1,909 @@
+---
+title: "Template UTS Data Mining — Preprocessing s.d. Klasifikasi"
+author: "Nama / NIM"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+    highlight: tango
+    number_sections: true
+  pdf_document:
+    toc: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo    = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  fig.align = "center"
+)
+```
+
+> **PETUNJUK PENGGUNAAN:** 1. Ganti `[GANTI_...]` sesuai soal UTS. 2. Pilih model yang diminta soal — nonaktifkan bagian lain dengan `#`.
+
+------------------------------------------------------------------------
+
+# Setup: Load Packages
+
+```{r load-packages}
+# === PAKET UTAMA ===
+library(dplyr)        # Manipulasi data
+library(tidyr)        # Tidy data
+library(ggplot2)      # Visualisasi
+
+# === PREPROCESSING ===
+library(caret)        # Preprocessing + CV + train unified
+
+# === MODEL ===
+library(rpart)        # Decision Tree (CART)
+library(rpart.plot)   # Visualisasi pohon
+library(C50)          # Decision Tree C5.0
+library(e1071)        # Naive Bayes + SVM
+library(naivebayes)   # Naive Bayes (lebih lengkap)
+library(class)        # KNN (knn())
+library(randomForest) # Random Forest
+library(nnet)         # Neural Network (MLP 1 hidden layer)
+library(pROC)         # ROC Curve & AUC
+
+# === KONFIGURASI TARGET (GANTI SESUAI SOAL) ===
+TARGET_COL <- "status"  # [GANTI] Nama kolom target/label kelas
+```
+
+------------------------------------------------------------------------
+
+# Load Dataset
+
+```{r load-data}
+# ============================================================
+# OPSI A: Gunakan dataset bawaan R (untuk latihan/uji template)
+# ============================================================
+# data("iris")          # Klasifikasi multi-kelas, 150 obs, 4 fitur numerik
+# data("Titanic")       # Klasifikasi biner (survival)
+# data("PimaIndiansDiabetes", package = "mlbench")  # Klasifikasi biner diabetes
+# data("BreastCancer", package = "mlbench")          # Klasifikasi kanker
+
+# ============================================================
+# OPSI B: Baca file CSV dari direktori kerja (sesuai soal UTS)
+# ============================================================
+# df <- read.csv("[GANTI_NAMA_FILE].csv", stringsAsFactors = FALSE)
+# df <- read.csv("[GANTI_NAMA_FILE].csv", sep = ";", stringsAsFactors = FALSE)
+
+# ============================================================
+# OPSI C: Dataset Latihan Bawaan Template (Kemiskinan RT)
+# Mirip contoh di materi kuliah — langsung bisa dijalankan
+# ============================================================
+set.seed(42)
+n <- 120
+df <- data.frame(
+  pekerjaan   = sample(c("Petani","Buruh","PNS","Wiraswasta"), n, replace = TRUE,
+                        prob = c(0.35, 0.30, 0.20, 0.15)),
+  pendidikan  = sample(c("Rendah","Menengah","Tinggi"), n, replace = TRUE,
+                        prob = c(0.45, 0.35, 0.20)),
+  akses_air   = sample(c("Ya","Tidak"), n, replace = TRUE, prob = c(0.55, 0.45)),
+  pengeluaran = round(rnorm(n, mean = 1500000, sd = 600000)),
+  jml_anggota = sample(2:8, n, replace = TRUE),
+  status      = factor(NA, levels = c("Miskin","Tidak_Miskin"))
+)
+# Buat label status berdasarkan aturan sederhana (simulasi)
+df$status <- ifelse(
+  df$pengeluaran < 1200000 | (df$pekerjaan %in% c("Petani","Buruh") & df$pendidikan == "Rendah"),
+  "Miskin", "Tidak_Miskin"
+) |> as.factor()
+
+# ── Tampilkan ringkasan awal
+cat("=== DIMENSI DATA ===\n")
+dim(df)
+cat("\n=== 6 BARIS PERTAMA ===\n")
+head(df)
+cat("\n=== STRUKTUR DATA ===\n")
+str(df)
+cat("\n=== RINGKASAN STATISTIK ===\n")
+summary(df)
+```
+
+------------------------------------------------------------------------
+
+# Eksplorasi Data (EDA)
+
+```{r eda}
+# Distribusi kelas target
+cat("=== DISTRIBUSI KELAS TARGET ===\n")
+table(df$status)
+prop.table(table(df$status)) |> round(3)
+
+# Cek missing value
+cat("\n=== JUMLAH MISSING VALUE PER KOLOM ===\n")
+colSums(is.na(df))
+
+# Visualisasi distribusi kelas
+ggplot(df, aes(x = status, fill = status)) +
+  geom_bar() +
+  labs(title = "Distribusi Kelas Target", x = "Status", y = "Frekuensi") +
+  theme_minimal()
+
+# [OPSIONAL] Boxplot variabel numerik vs kelas
+# ggplot(df, aes(x = status, y = pengeluaran, fill = status)) +
+#   geom_boxplot() + labs(title = "Pengeluaran vs Status") + theme_minimal()
+```
+
+------------------------------------------------------------------------
+
+# Preprocessing
+
+## Tangani Missing Values
+
+```{r missing-values}
+# ── CEK missing
+cat("=== CEK MISSING VALUE ===\n")
+colSums(is.na(df))
+
+# ── IMPUTASI (pilih satu metode sesuai kondisi data)
+
+# [CARA 1] Hapus baris yang mengandung NA (jika sedikit)
+# df <- na.omit(df)
+
+# [CARA 2] Imputasi numerik → Mean/Median
+# Gunakan MEDIAN untuk data skewed / ada outlier, MEAN untuk data normal
+# num_cols <- names(df)[sapply(df, is.numeric)]
+# cat("\nKolom numerik:", num_cols, "\n")
+# 
+# for (col in num_cols) {
+#   if (any(is.na(df[[col]]))) {
+#     median_val <- median(df[[col]], na.rm = TRUE)
+#     df[[col]][is.na(df[[col]])] <- median_val
+#     cat("  →", col, "diimputasi dengan median:", median_val, "\n")
+#   }
+# }
+
+# [CARA 3] Imputasi kategorik → Modus (nilai terbanyak)
+get_mode <- function(x) {
+  ux <- na.omit(unique(x))
+  ux[which.max(tabulate(match(x, ux)))]
+}
+cat_cols <- names(df)[sapply(df, is.character)]
+for (col in cat_cols) {
+  if (any(is.na(df[[col]]))) {
+    modus <- get_mode(df[[col]])
+    df[[col]][is.na(df[[col]])] <- modus
+    cat("  →", col, "diimputasi dengan modus:", modus, "\n")
+  }
+}
+
+cat("\nMissing setelah imputasi:\n")
+colSums(is.na(df))
+```
+
+## Encoding Variabel Kategorik
+
+```{r encoding}
+# ── Identifikasi kolom kategorik (character → factor)
+cat_cols <- names(df)[sapply(df, is.character)]
+cat("Kolom kategorik:", cat_cols, "\n")
+
+# # [CARA 1] Label Encoding — ubah ke integer (untuk Decision Tree, NB)
+# df_label <- df
+# for (col in cat_cols) {
+#   df_label[[col]] <- as.integer(as.factor(df[[col]]))
+#   cat("  Label Encoding →", col, ":", levels(as.factor(df[[col]])), "\n")
+# }
+
+# [CARA 2] Tetap sebagai factor (paling aman untuk rpart, C5.0, Naive Bayes)
+df_factor <- df
+for (col in cat_cols) {
+  df_factor[[col]] <- as.factor(df[[col]])
+}
+
+# >>> PILIH df yang akan digunakan selanjutnya <<<
+# Untuk Decision Tree & Naive Bayes → df_factor
+# Untuk KNN (butuh numerik) → df_label
+df_processed <- df_factor
+cat("\nStruktur setelah encoding:\n")
+str(df_processed)
+```
+
+## Deteksi & Tangani Outlier
+
+```{r outlier}
+# ── Deteksi dengan metode IQR (Inter-Quartile Range)
+num_cols <- names(df_processed)[sapply(df_processed, is.numeric)]
+
+for (col in num_cols) {
+  Q1 <- quantile(df_processed[[col]], 0.25, na.rm = TRUE)
+  Q3 <- quantile(df_processed[[col]], 0.75, na.rm = TRUE)
+  IQR_val <- Q3 - Q1
+  lower <- Q1 - 1.5 * IQR_val
+  upper <- Q3 + 1.5 * IQR_val
+  outliers <- sum(df_processed[[col]] < lower | df_processed[[col]] > upper, na.rm = TRUE)
+  cat(sprintf("  %s: %d outlier (batas: [%.1f, %.1f])\n", col, outliers, lower, upper))
+}
+
+# ── Penanganan outlier (pilih satu):
+
+# [CARA 1] Winsorizing — capping ke batas IQR (DIREKOMENDASIKAN, tidak buang data)
+winsorize <- function(x) {
+  Q1 <- quantile(x, 0.25, na.rm = TRUE)
+  Q3 <- quantile(x, 0.75, na.rm = TRUE)
+  IQR_val <- Q3 - Q1
+  x[x < (Q1 - 1.5 * IQR_val)] <- Q1 - 1.5 * IQR_val
+  x[x > (Q3 + 1.5 * IQR_val)] <- Q3 + 1.5 * IQR_val
+  x
+}
+# df_processed[num_cols] <- lapply(df_processed[num_cols], winsorize)
+
+# [CARA 2] Hapus baris outlier
+# df_processed <- df_processed |>
+#   filter(across(all_of(num_cols), ~ . >= quantile(., 0.25) - 1.5*IQR(.) &
+#                                       . <= quantile(., 0.75) + 1.5*IQR(.)))
+
+cat("Data setelah penanganan outlier:", nrow(df_processed), "baris\n")
+```
+
+## Normalisasi / Scaling
+
+```{r normalisasi}
+# ── PERHATIAN: Normalisasi WAJIB untuk KNN, opsional untuk Decision Tree
+# Untuk Decision Tree & Naive Bayes → bisa SKIP normalisasi
+
+num_cols <- names(df_processed)[sapply(df_processed, is.numeric)]
+
+# ── Simpan data asli sebelum scaling (untuk referensi)
+df_before_scale <- df_processed
+
+# [CARA 1] Min-Max Normalization → hasil di [0, 1]
+minmax_norm <- function(x) (x - min(x)) / (max(x) - min(x))
+df_minmax <- df_processed
+df_minmax[num_cols] <- lapply(df_processed[num_cols], minmax_norm)
+cat("Min-Max Normalization selesai.\n")
+head(df_minmax[num_cols])
+
+# [CARA 2] Z-Score Standardization → mean=0, sd=1 (untuk KNN)
+df_zscore <- df_processed
+df_zscore[num_cols] <- scale(df_processed[num_cols])
+cat("\nZ-Score Standardization selesai.\n")
+head(df_zscore[num_cols])
+
+# [CARA 3] Decimal Scaling (Materi kuliah P2)
+decimal_scale <- function(x) x / (10^ceiling(log10(max(abs(x), na.rm = TRUE))))
+# df_decimal <- df_processed
+# df_decimal[num_cols] <- lapply(df_processed[num_cols], decimal_scale)
+
+# >>> PILIH versi untuk modeling <<<
+# Untuk Decision Tree/NB → df_processed (tanpa scaling)
+# Untuk KNN → df_zscore atau df_minmax
+df_final <- df_processed   # Ganti sesuai model yang digunakan
+```
+
+------------------------------------------------------------------------
+
+# Split Data: Train & Test
+
+```{r split-data}
+set.seed(42)
+
+# ── PILIH PROPORSI (70:30 atau 80:20)
+train_prop <- 0.8   # [GANTI] Ganti 0.7 untuk 70:30
+
+idx_train <- createDataPartition(df_final$status, p = train_prop,
+                                  list = FALSE, times = 1)
+train_df <- df_final[ idx_train, ]
+test_df  <- df_final[-idx_train, ]
+
+cat("=== UKURAN DATA ===\n")
+cat("Total    :", nrow(df_final), "baris\n")
+cat("Train    :", nrow(train_df), "baris\n")
+cat("Test     :", nrow(test_df),  "baris\n")
+cat("\nDistribusi kelas di train:\n")
+table(train_df$status)
+cat("\nDistribusi kelas di test:\n")
+table(test_df$status)
+```
+
+------------------------------------------------------------------------
+
+# Setup Cross-Validation (Global)
+
+```{r cv-setup}
+# ── Setup CV 10-fold (pakai di semua model via caret)
+# ctrl_cv <- trainControl(
+#   method          = "cv",
+#   number          = 10,
+#   savePredictions = "final",
+#   classProbs      = TRUE
+# )
+
+# ── Setup CV 5-fold (lebih cepat untuk UTS)
+ctrl_cv5 <- trainControl(
+  method          = "cv",
+  number          = 5,
+  savePredictions = "final",
+  classProbs      = TRUE
+)
+
+# ── Setup untuk evaluasi metrics
+eval_metrics <- function(pred_class, actual) {
+  cm <- confusionMatrix(pred_class, actual, positive = levels(actual)[2],
+                        mode = "everything")
+  cat("=== CONFUSION MATRIX ===\n")
+  print(cm$table)
+  cat(sprintf("\nAccuracy     : %.4f (%.2f%%)\n", cm$overall["Accuracy"], cm$overall["Accuracy"]*100))
+  cat(sprintf("Kappa        : %.4f\n", cm$overall["Kappa"]))
+  cat(sprintf("Sensitivity  : %.4f  (Recall / TPR)\n", cm$byClass["Sensitivity"]))
+  cat(sprintf("Specificity  : %.4f  (TNR)\n", cm$byClass["Specificity"]))
+  cat(sprintf("Precision    : %.4f  (PPV)\n", cm$byClass["Precision"]))
+  cat(sprintf("F1-Score     : %.4f\n", cm$byClass["F1"]))
+  cat(sprintf("Balanced Acc : %.4f\n", cm$byClass["Balanced Accuracy"]))
+  invisible(cm)
+}
+```
+
+------------------------------------------------------------------------
+
+# MODEL 1: Decision Tree (rpart — CART)
+
+```{r model-dt-rpart}
+cat("========== DECISION TREE (CART/rpart) ==========\n")
+
+# ── 1. Training
+dt_model <- rpart(
+  status ~ .,
+  data    = train_df,
+  method  = "class",
+  control = rpart.control(
+    minsplit  = 20,    # min observasi untuk split
+    minbucket = 7,     # min obs di leaf
+    maxdepth  = 5,     # kedalaman max pohon
+    cp        = 0.01   # complexity parameter
+  )
+)
+
+# ── 2. Tampilkan model & CP table
+cat("\nCP Table (untuk pruning):\n")
+printcp(dt_model)
+
+# ── 3. Pruning optimal (pilih cp dengan xerror minimum)
+best_cp <- dt_model$cptable[which.min(dt_model$cptable[,"xerror"]), "CP"]
+cat("\nBest CP:", best_cp, "\n")
+dt_pruned <- prune(dt_model, cp = best_cp)
+
+# ── 4. Visualisasi pohon
+rpart.plot(dt_pruned, type = 4, extra = 101, under = TRUE,
+           main = "Decision Tree — Pruned")
+
+# ── 5. Prediksi & Evaluasi
+pred_dt <- predict(dt_pruned, newdata = test_df, type = "class")
+cat("\n--- Evaluasi Decision Tree (rpart) ---\n")
+cm_dt <- eval_metrics(pred_dt, test_df$status)
+
+# ── 6. Feature Importance
+cat("\nFeature Importance:\n")
+print(dt_pruned$variable.importance)
+```
+
+## Decision Tree dengan caret (CV + Tuning)
+
+```{r model-dt-caret}
+# ── Tuning Decision Tree via caret (opsional, lebih lama)
+tune_grid_dt <- expand.grid(cp = seq(0.001, 0.05, by = 0.005))
+
+dt_caret <- train(
+  status ~ .,
+  data       = train_df,
+  method     = "rpart",
+  trControl  = ctrl_cv5,
+  tuneGrid   = tune_grid_dt
+)
+
+cat("Best CP (caret):", dt_caret$bestTune$cp, "\n")
+plot(dt_caret, main = "Tuning Decision Tree — CP")
+
+pred_dt_cv <- predict(dt_caret, newdata = test_df)
+cat("\n--- Evaluasi DT + 5-CV ---\n")
+eval_metrics(pred_dt_cv, test_df$status)
+```
+
+------------------------------------------------------------------------
+
+# MODEL 2: Decision Tree C5.0 (C4.5)
+
+```{r model-c50}
+cat("========== DECISION TREE C5.0 ==========\n")
+
+# ── C5.0 butuh X sebagai data.frame terpisah
+X_train <- train_df |> select(-status)
+y_train <- train_df$status
+X_test  <- test_df  |> select(-status)
+y_test  <- test_df$status
+
+# ── Training
+c50_model <- C5.0(
+  x      = X_train,
+  y      = y_train,
+  trials = 1,       # 1 = pohon tunggal; > 1 = boosting
+  rules  = FALSE    # TRUE untuk output rules (teks)
+)
+summary(c50_model)
+
+# ── Feature Importance
+cat("\nFeature Importance C5.0:\n")
+print(C5imp(c50_model))
+
+# ── Prediksi & Evaluasi
+pred_c50 <- predict(c50_model, newdata = X_test)
+cat("\n--- Evaluasi C5.0 ---\n")
+eval_metrics(pred_c50, y_test)
+```
+
+------------------------------------------------------------------------
+
+# MODEL 3: Naive Bayes
+
+```{r model-nb}
+cat("========== NAIVE BAYES ==========\n")
+
+# ── PILIH varian NB sesuai data:
+# - Gaussian NB (naivebayes): fitur numerik kontinu
+# - Categorical NB (naivebayes): fitur kategorik
+# - e1071::naiveBayes: campuran numerik + kategorik
+
+# [VARIAN 1] naivebayes (pkg: naivebayes) — Gaussian + Kernel + Bernoulli
+nb_model <- naive_bayes(
+  status ~ .,
+  data       = train_df,
+  laplace    = 1,        # Laplace smoothing (α=1)
+  usekernel  = FALSE     # FALSE=Gaussian, TRUE=Kernel density
+)
+print(nb_model)
+
+pred_nb <- predict(nb_model, newdata = test_df)
+cat("\n--- Evaluasi Naive Bayes (naivebayes pkg) ---\n")
+eval_metrics(pred_nb, test_df$status)
+
+# ── Probabilitas prediksi
+prob_nb <- predict(nb_model, newdata = test_df, type = "prob")
+cat("\nContoh probabilitas 5 baris pertama:\n")
+print(head(prob_nb, 5))
+```
+
+## Naive Bayes dengan caret (CV + Tuning)
+
+```{r model-nb-caret}
+# ── Tuning Naive Bayes via caret
+tune_grid_nb <- expand.grid(
+  laplace    = c(0, 0.5, 1, 2),
+  usekernel  = c(FALSE, TRUE),
+  adjust     = c(0.5, 1, 1.5)
+)
+
+nb_caret <- train(
+  status ~ .,
+  data      = train_df,
+  method    = "naive_bayes",
+  trControl = ctrl_cv5,
+  tuneGrid  = tune_grid_nb
+)
+
+cat("Best Tune NB (caret):\n")
+print(nb_caret$bestTune)
+
+pred_nb_cv <- predict(nb_caret, newdata = test_df)
+cat("\n--- Evaluasi NB + 5-CV ---\n")
+eval_metrics(pred_nb_cv, test_df$status)
+```
+
+------------------------------------------------------------------------
+
+# MODEL 4: K-Nearest Neighbors (KNN)
+
+> **PENTING:** KNN wajib menggunakan data yang sudah di-scaling dan semua fitur numerik!
+
+```{r model-knn}
+cat("========== KNN ==========\n")
+
+# ── Siapkan data numerik untuk KNN (gunakan df_zscore atau df_minmax)
+# Encode semua kategorik → numerik terlebih dahulu
+df_knn <- df_final
+
+# Encode faktor → integer untuk KNN
+factor_cols <- names(df_knn)[sapply(df_knn, is.factor) & names(df_knn) != "status"]
+for (col in factor_cols) {
+  df_knn[[col]] <- as.integer(df_knn[[col]])
+}
+
+# Z-score scaling pada semua fitur numerik (kecuali target)
+num_cols_knn <- names(df_knn)[sapply(df_knn, is.numeric)]
+df_knn[num_cols_knn] <- scale(df_knn[num_cols_knn])
+
+# Re-split
+train_knn <- df_knn[ idx_train, ]
+test_knn  <- df_knn[-idx_train, ]
+
+X_train_knn <- train_knn |> select(-status) |> as.matrix()
+y_train_knn <- train_knn$status
+X_test_knn  <- test_knn  |> select(-status) |> as.matrix()
+y_test_knn  <- test_knn$status
+
+# ── KNN dengan class::knn — pilih k secara manual
+k_val <- 5    # [GANTI] nilai K sesuai soal (aturan praktis: sqrt(n_train))
+pred_knn <- knn(
+  train = X_train_knn,
+  test  = X_test_knn,
+  cl    = y_train_knn,
+  k     = k_val
+)
+cat(sprintf("KNN dengan k=%d:\n", k_val))
+eval_metrics(pred_knn, y_test_knn)
+```
+
+## KNN dengan caret — Tuning Optimal K
+
+```{r model-knn-caret}
+# ── Cari k optimal via 5-fold CV
+tune_grid_knn <- expand.grid(k = c(3, 5, 7, 9, 11, 15, 21))
+
+knn_caret <- train(
+  status ~ .,
+  data      = train_knn,
+  method    = "knn",
+  trControl = ctrl_cv5,
+  tuneGrid  = tune_grid_knn
+)
+
+cat("K Optimal (caret):", knn_caret$bestTune$k, "\n")
+plot(knn_caret, main = "Tuning KNN — Nilai K")
+
+pred_knn_cv <- predict(knn_caret, newdata = test_knn)
+cat("\n--- Evaluasi KNN optimal + 5-CV ---\n")
+eval_metrics(pred_knn_cv, y_test_knn)
+```
+
+------------------------------------------------------------------------
+
+# MODEL 5: Random Forest
+
+> **Tips UTS:** Set `ntree = 100` agar lebih cepat saat ujian.
+
+```{r model-rf}
+cat("========== RANDOM FOREST ==========\n")
+
+set.seed(42)
+rf_model <- randomForest(
+  status ~ .,
+  data       = train_df,
+  ntree      = 100,    # jumlah pohon (default 500, turunkan → lebih cepat)
+  mtry       = floor(sqrt(ncol(train_df) - 1)), # default: sqrt(p)
+  importance = TRUE
+)
+print(rf_model)
+
+# ── Feature Importance
+cat("\nFeature Importance:\n")
+print(importance(rf_model))
+varImpPlot(rf_model, main = "Feature Importance — Random Forest")
+
+# ── Prediksi & Evaluasi
+pred_rf <- predict(rf_model, newdata = test_df)
+cat("\n--- Evaluasi Random Forest ---\n")
+eval_metrics(pred_rf, test_df$status)
+```
+
+## Random Forest dengan caret (Tuning mtry)
+
+```{r model-rf-caret}
+# ── Tuning mtry via 5-CV (lebih lama)
+p_feat <- ncol(train_df) - 1
+tune_grid_rf <- expand.grid(mtry = c(2, floor(sqrt(p_feat)), floor(p_feat/2)))
+
+rf_caret <- train(
+  status ~ .,
+  data      = train_df,
+  method    = "rf",
+  trControl = ctrl_cv5,
+  tuneGrid  = tune_grid_rf,
+  ntree     = 100
+)
+
+cat("Best mtry (caret):", rf_caret$bestTune$mtry, "\n")
+pred_rf_cv <- predict(rf_caret, newdata = test_df)
+cat("\n--- Evaluasi RF + 5-CV ---\n")
+eval_metrics(pred_rf_cv, test_df$status)
+```
+
+------------------------------------------------------------------------
+
+# MODEL 6: Support Vector Machine (SVM)
+
+> **PENTING:** SVM wajib scaling! `preProcess` di caret otomatis menangani ini.
+
+```{r model-svm, warning=FALSE}
+cat("========== SVM (Radial Kernel) ==========\n")
+
+set.seed(42)
+svm_model <- train(
+  status ~ .,
+  data       = train_df,
+  method     = "svmRadial",
+  trControl  = ctrl_cv5,
+  preProcess = c("center", "scale"),
+  tuneLength = 5
+)
+
+cat("Best Tune SVM:\n")
+print(svm_model$bestTune)
+plot(svm_model, main = "Tuning SVM — C & Sigma")
+
+pred_svm <- predict(svm_model, newdata = test_df)
+cat("\n--- Evaluasi SVM ---\n")
+cm_svm <- eval_metrics(pred_svm, test_df$status)
+```
+
+------------------------------------------------------------------------
+
+# MODEL 7: Neural Network (nnet — MLP)
+
+> **PENTING:** NN wajib scaling! Set `trace=FALSE` agar output rapi. `MaxNWts` dinaikkan jika error.
+
+```{r model-nn, warning=FALSE, message=FALSE}
+cat("========== NEURAL NETWORK (nnet) ==========\n")
+
+set.seed(42)
+tune_grid_nn <- expand.grid(
+  size  = c(3, 5, 7),
+  decay = c(0, 0.01, 0.1)
+)
+
+nn_model <- train(
+  status ~ .,
+  data       = train_df,
+  method     = "nnet",
+  trControl  = ctrl_cv5,
+  preProcess = c("center", "scale"),
+  tuneGrid   = tune_grid_nn,
+  trace      = FALSE,
+  maxit      = 300,
+  MaxNWts    = 5000
+)
+
+cat("Best Tune NN:\n")
+print(nn_model$bestTune)
+plot(nn_model, main = "Tuning Neural Network — Size & Decay")
+
+pred_nn <- predict(nn_model, newdata = test_df)
+cat("\n--- Evaluasi Neural Network ---\n")
+cm_nn <- eval_metrics(pred_nn, test_df$status)
+```
+
+------------------------------------------------------------------------
+
+# Evaluasi ROC Curve & AUC
+
+> ROC sangat direkomendasikan untuk klasifikasi **Biner** (2 Kelas).
+
+```{r roc-auc, fig.width=7, fig.height=6, warning=FALSE, message=FALSE}
+cat("========== ROC CURVE & AUC ==========\n\n")
+
+if(length(levels(test_df$status)) == 2) {
+  model_roc_list <- list(
+    "Decision Tree" = dt_caret,
+    "Naive Bayes"   = nb_caret,
+    "KNN"           = knn_caret,
+    "Random Forest"  = rf_caret,
+    "SVM"           = svm_model,
+    "Neural Network" = nn_model
+  )
+  
+  colors <- c("red","blue","cyan","darkgreen","purple","orange")
+  pos_class <- levels(test_df$status)[2]
+  
+  plot(NULL, xlim=c(1,0), ylim=c(0,1),
+       xlab="1 - Specificity (FPR)", ylab="Sensitivity (TPR)",
+       main="ROC Curves — Perbandingan Model")
+  abline(a=0, b=1, lty=2, col="gray")
+  
+  auc_results <- c()
+  for(i in seq_along(model_roc_list)) {
+    nm <- names(model_roc_list)[i]
+    mdl <- model_roc_list[[i]]
+    tryCatch({
+      prob <- predict(mdl, newdata = test_df, type = "prob")
+      roc_obj <- roc(response = test_df$status, predictor = prob[[pos_class]], quiet=TRUE)
+      lines(roc_obj, col = colors[i], lwd = 2)
+      auc_val <- round(auc(roc_obj), 4)
+      auc_results[nm] <- auc_val
+      cat(sprintf("  %-20s AUC: %.4f\n", nm, auc_val))
+    }, error = function(e) cat(sprintf("  %-20s ROC tidak tersedia\n", nm)))
+  }
+  
+  legend("bottomright", names(model_roc_list), col=colors, lwd=2, cex=0.7)
+  
+  cat("\nInterpretasi AUC: >0.9 (Sangat Baik), >0.8 (Baik), >0.7 (Cukup), <0.6 (Buruk)\n")
+} else {
+  cat("Target >2 kelas — ROC standar tidak berlaku. Gunakan F1/Accuracy.\n")
+}
+```
+
+------------------------------------------------------------------------
+
+# Perbandingan Semua Model
+
+```{r compare-models}
+cat("========== PERBANDINGAN MODEL ==========\n")
+
+# ── Kumpulkan akurasi semua model
+models_pred <- list(
+  "Decision Tree (rpart)" = pred_dt,
+  "Decision Tree (C5.0)"  = pred_c50,
+  "Naive Bayes"           = pred_nb,
+  "KNN (k optimal)"       = pred_knn_cv,
+  "Random Forest"         = pred_rf,
+  "SVM (Radial)"          = pred_svm,
+  "Neural Network"        = pred_nn
+)
+
+# Sesuaikan test set berdasarkan model (KNN pakai test_knn, lainnya test_df)
+target_list <- list(
+  "Decision Tree (rpart)" = test_df$status,
+  "Decision Tree (C5.0)"  = y_test,
+  "Naive Bayes"           = test_df$status,
+  "KNN (k optimal)"       = y_test_knn,
+  "Random Forest"         = test_df$status,
+  "SVM (Radial)"          = test_df$status,
+  "Neural Network"        = test_df$status
+)
+
+result_df <- data.frame(
+  Model = character(), Accuracy = numeric(),
+  Kappa = numeric(), F1_Score = numeric(),
+  stringsAsFactors = FALSE
+)
+
+for (nm in names(models_pred)) {
+  cm_tmp <- confusionMatrix(models_pred[[nm]], target_list[[nm]],
+                            positive = levels(target_list[[nm]])[2])
+  result_df <- rbind(result_df, data.frame(
+    Model    = nm,
+    Accuracy = round(cm_tmp$overall["Accuracy"], 4),
+    Kappa    = round(cm_tmp$overall["Kappa"], 4),
+    F1_Score = round(cm_tmp$byClass["F1"], 4)
+  ))
+}
+
+cat("\nRingkasan Perbandingan Model:\n")
+print(result_df[order(-result_df$Accuracy), ], row.names = FALSE)
+
+# ── Visualisasi
+ggplot(result_df, aes(x = reorder(Model, Accuracy), y = Accuracy, fill = Model)) +
+  geom_bar(stat = "identity", width = 0.6) +
+  geom_text(aes(label = scales::percent(Accuracy, accuracy = 0.1)),
+            hjust = -0.1, size = 3.5) +
+  coord_flip() +
+  scale_y_continuous(limits = c(0, 1.1), labels = scales::percent) +
+  labs(title = "Perbandingan Akurasi Model", x = "", y = "Accuracy") +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+------------------------------------------------------------------------
+
+# Evaluasi Lanjutan: Confusion Matrix Lengkap
+
+```{r eval-lanjutan}
+cat("========== EVALUASI LENGKAP MODEL TERBAIK ==========\n")
+
+# Ganti nama model terbaik sesuai hasil perbandingan
+# Contoh: model_terbaik <- pred_rf  →  target: test_df$status
+
+model_terbaik       <- pred_rf          # [GANTI] sesuai model terbaik
+target_terbaik      <- test_df$status   # [GANTI] sesuai
+
+cm_full <- confusionMatrix(model_terbaik, target_terbaik,
+                            positive = levels(target_terbaik)[2],
+                            mode = "everything")
+print(cm_full)
+
+cat("\n=== RANGKUMAN METRIK ===\n")
+cat(sprintf("Accuracy    : %.4f  (%.2f%%)\n",
+            cm_full$overall["Accuracy"], cm_full$overall["Accuracy"]*100))
+cat(sprintf("Kappa       : %.4f\n", cm_full$overall["Kappa"]))
+cat(sprintf("Sensitivity : %.4f  (Recall / TPR)\n", cm_full$byClass["Sensitivity"]))
+cat(sprintf("Specificity : %.4f  (TNR)\n", cm_full$byClass["Specificity"]))
+cat(sprintf("Precision   : %.4f  (PPV)\n", cm_full$byClass["Precision"]))
+cat(sprintf("F1-Score    : %.4f\n", cm_full$byClass["F1"]))
+cat(sprintf("Balanced Acc: %.4f\n", cm_full$byClass["Balanced Accuracy"]))
+```
+
+------------------------------------------------------------------------
+
+# Prediksi Data Baru
+
+> **Gunakan chunk ini jika soal meminta prediksi terhadap data baru.**
+
+```{r prediksi-baru}
+# ── Ganti nama file sesuai soal
+# FILE_PREDIKSI <- "data_prediksi.csv"
+
+# ── [OPSI A] Data baru dari CSV
+# df_baru <- read.csv(FILE_PREDIKSI, stringsAsFactors = FALSE)
+
+# ── [OPSI B] Data baru manual (contoh)
+df_baru <- data.frame(
+  pekerjaan   = "Petani",
+  pendidikan  = "Rendah",
+  akses_air   = "Tidak",
+  pengeluaran = 900000,
+  jml_anggota = 5
+)
+
+# ── Samakan tipe data dengan training
+for (col in names(df_baru)) {
+  if (is.factor(df_final[[col]])) {
+    df_baru[[col]] <- factor(df_baru[[col]], levels = levels(df_final[[col]]))
+  }
+}
+
+# ── Prediksi (ganti model sesuai model terbaik)
+pred_baru  <- predict(rf_caret, newdata = df_baru)            # [GANTI] model
+prob_baru  <- predict(rf_caret, newdata = df_baru, type="prob") # [GANTI] model
+
+cat("=== HASIL PREDIKSI DATA BARU ===\n")
+cat("Prediksi kelas:", as.character(pred_baru), "\n\n")
+cat("Probabilitas:\n")
+print(prob_baru)
+
+# ── [OPSIONAL] Export hasil prediksi batch
+# df_baru$prediksi <- predict(rf_caret, newdata = df_baru)
+# write.csv(df_baru, "hasil_prediksi.csv", row.names = FALSE)
+```
+
+------------------------------------------------------------------------
+
+# Ringkasan & Kesimpulan
+
+```{r kesimpulan}
+cat("========== KESIMPULAN ==========\n")
+cat("Dataset      :", nrow(df), "observasi,", ncol(df), "variabel\n")
+cat("Fitur        :", paste(names(df_final[,-which(names(df_final)==TARGET_COL)]),
+                             collapse=", "), "\n")
+cat("Target       :", TARGET_COL, "(", paste(levels(df_final[[TARGET_COL]]), collapse=" / "), ")\n")
+cat("Split        : Train", nrow(train_df), "| Test", nrow(test_df), "\n")
+cat("CV           : 5-Fold Cross-Validation\n\n")
+
+cat("Preprocessing yang dilakukan:\n")
+cat("  [✓] Imputasi missing value (median/modus)\n")
+cat("  [✓] Encoding variabel kategorik\n")
+cat("  [✓] Deteksi outlier (IQR)\n")
+cat("  [✓] Normalisasi/scaling (Z-Score untuk KNN/SVM/NN)\n\n")
+
+cat("Model yang diuji:\n")
+cat("  [✓] Decision Tree (CART/rpart)\n")
+cat("  [✓] Decision Tree (C5.0)\n")
+cat("  [✓] Naive Bayes\n")
+cat("  [✓] K-Nearest Neighbors\n")
+cat("  [✓] Random Forest\n")
+cat("  [✓] SVM (Radial Kernel)\n")
+cat("  [✓] Neural Network (nnet/MLP)\n\n")
+
+cat("Model terbaik: [TULIS NAMA MODEL]\n")
+cat("Accuracy     : [TULIS NILAI ACCURACY]\n")
+cat("Alasan       : [TULIS INTERPRETASI SINGKAT]\n")
+```
+
+------------------------------------------------------------------------
+
+> **REFERENSI DATASET UNTUK LATIHAN:**
+>
+> | Dataset | Cara Load | Kelas | Tipe Soal |
+> |------------------|------------------|------------------|------------------|
+> | `iris` | `data(iris)` | 3 kelas bunga | Multi-class |
+> | `PimaIndiansDiabetes` | `data(..., pkg="mlbench")` | Diabetes Y/N | Binary |
+> | `BreastCancer` | `data(..., pkg="mlbench")` | Benign/Malignant | Binary + missing |
+> | `Sonar` | `data(..., pkg="mlbench")` | Mine/Rock | Binary, 60 fitur |
+> | `Glass` | `data(..., pkg="mlbench")` | 6 kelas kaca | Multi-class |
+> | `Ionosphere` | `data(..., pkg="mlbench")` | Good/Bad | Binary, 34 fitur |
+> | `HouseVotes84` | `data(..., pkg="mlbench")` | Kategorik | Klasifikasi |
+>
+> Install: `install.packages("mlbench")`
+

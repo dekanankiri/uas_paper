@@ -30,7 +30,6 @@ knitr::opts_chunk$set(
 
 # ============================================================================
 
-
 ```{r konfigurasi-global}
 # ========== 1. VARIABEL KONFIGURASI UTAMA ==========
 SEED_NUMBER <- 123
@@ -76,7 +75,6 @@ library(palmerpenguins)
 #USE_SMOTE <- FALSE
 ```
 
-
 # ============================================================================
 
 # TAHAP 1: LIBRARY & SETUP ENVIRONMENT
@@ -112,8 +110,11 @@ cat("✓ Seed:", SEED_NUMBER, "\n")
 cat("✓ Target variabel:", TARGET_VAR, "\n")
 cat("✓ Tuning strategy:", TUNING_STRATEGY, "\n")
 ```
+
 # ============================================================================
+
 # TAHAP 1.5: INSPEKSI AWAL (DATA DISCOVERY)
+
 # ============================================================================
 
 ```{r}
@@ -217,9 +218,15 @@ if (nrow(target_dist) == 2) {
   }
 }
 ```
-Struktur *chunk* `TAHAP 2` ini telah dirombak total menjadi 5 sub-tahapan yang sangat berurutan. Format ini dirancang khusus agar saat menghadapi ujian praktik nanti, Anda tidak perlu memburu baris kode yang tersebar. Cukup fokus pada **Bagian 2 (Pencegahan Data Leakage)** jika ada variabel yang perlu dibuang.
 
-Ganti seluruh *chunk* `# TAHAP 2: INGESTION & PEMBERSIHAN DATA` Anda dengan susunan di bawah ini:
+Struktur *chunk* `TAHAP 2` ini telah dirombak total menjadi 5
+sub-tahapan yang sangat berurutan. Format ini dirancang khusus agar saat
+menghadapi ujian praktik nanti, Anda tidak perlu memburu baris kode yang
+tersebar. Cukup fokus pada **Bagian 2 (Pencegahan Data Leakage)** jika
+ada variabel yang perlu dibuang.
+
+Ganti seluruh *chunk* `# TAHAP 2: INGESTION & PEMBERSIHAN DATA` Anda
+dengan susunan di bawah ini:
 
 ```{r pembersihan-data}
 # ============================================================================
@@ -293,13 +300,18 @@ if (nrow(target_dist) == 2) {
 
 ```
 
-
 ### Panduan Taktis Penggunaan Saat Ujian:
-* **Jika Dataset Benar-Benar Bersih:** Anda cukup membiarkan `kolom_bocor <- c()`. Fungsi `any_of` akan dengan aman melewati tahap penghapusan tanpa memicu pesan error.
-* **Keamanan Terpadu:** Standarisasi nama target menggunakan `make_clean_names` di bagian paling atas memastikan bahwa apa pun konfigurasi teks yang Anda masukkan di Tahap 1, ia akan selalu sinkron dengan nama kolom di dalam `data_clean`.
-* **Diagnostik Akurat:** Bagian inspeksi di bawah tidak akan lagi menampilkan peringatan ketidakseimbangan yang menipu atau mendeteksi *missing values* dari kolom-kolom yang sebenarnya sudah Anda buang.
 
-
+-   **Jika Dataset Benar-Benar Bersih:** Anda cukup membiarkan
+    `kolom_bocor <- c()`. Fungsi `any_of` akan dengan aman melewati
+    tahap penghapusan tanpa memicu pesan error.
+-   **Keamanan Terpadu:** Standarisasi nama target menggunakan
+    `make_clean_names` di bagian paling atas memastikan bahwa apa pun
+    konfigurasi teks yang Anda masukkan di Tahap 1, ia akan selalu
+    sinkron dengan nama kolom di dalam `data_clean`.
+-   **Diagnostik Akurat:** Bagian inspeksi di bawah tidak akan lagi
+    menampilkan peringatan ketidakseimbangan yang menipu atau mendeteksi
+    *missing values* dari kolom-kolom yang sebenarnya sudah Anda buang.
 
 # ============================================================================
 
@@ -1153,7 +1165,9 @@ if (exists("final_dt_fit")) {
 ```
 
 # ============================================================================
+
 # TAHAP 11: PREDIKSI DATA INDIVIDU BARU (CARA PALING AMAN)
+
 # ============================================================================
 
 ```{r predict-new-data}
@@ -1376,7 +1390,7 @@ TERBAIK SETIAP MODEL"*
 Performa model **[NAMA_MODEL_CHAMPION]** pada data testing:
 
 | Metrik | Nilai | Interpretasi |
-|------------------------|------------------------|------------------------|
+|----|----|----|
 | **ROC-AUC** | **[NILAI]** | Kemampuan diskriminasi model (0.5 = random, 1.0 = sempurna) |
 | **Accuracy** | **[NILAI]** | Proporsi prediksi benar dari total prediksi |
 | **Sensitivity (Recall)** | **[NILAI]** | Proporsi kelas **[KELAS_POSITIF]** yang terdeteksi dengan benar |

@@ -1,0 +1,548 @@
+---
+title: "Template Esai Data Mining (Universal)"
+author: "NAMA - KELAS"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    theme: united
+    highlight: tango
+---
+
+```{css, echo=FALSE}
+/* Styling agar output lebih rapi */
+.hasil-box { background: #e8f5e9; padding: 12px; border-left: 4px solid #4caf50; margin: 8px 0; }
+.warn-box  { background: #fff3e0; padding: 12px; border-left: 4px solid #ff9800; margin: 8px 0; }
+.info-box  { background: #e3f2fd; padding: 12px; border-left: 4px solid #2196f3; margin: 8px 0; }
+pre { max-height: 400px; overflow-y: auto; }
+```
+
+> **PRINSIP UJIAN:** 1. MODEL HARUS JALAN! Drop kolom bermasalah daripada buang waktu. 2. Eksekusi chunk SATU PER SATU dari atas. 3. Pastikan kolom TARGET sudah `factor` sebelum Split (Bagian 4).
+
+------------------------------------------------------------------------
+
+# ⚙️ KONFIGURASI AWAL {.tabset}
+
+**Ubah variabel di chunk ini sesuai soal ujian.**
+
+```{r CONFIG, message=FALSE, warning=FALSE}
+# ╔══════════════════════════════════════════════════════════════╗
+# ║  UBAH BAGIAN INI SESUAI SOAL UJIAN                         ║
+# ╚══════════════════════════════════════════════════════════════╝
+
+NAMA_FILE_DATA    <- "uts_data.csv"       # File data training
+NAMA_FILE_PREDIK  <- "uts_predik.csv"     # File data prediksi (kosongkan "" jika tidak ada)
+TARGET_COL        <- "status"             # Nama kolom target/label kelas
+KOLOM_ID          <- c("no_sampel")       # Kolom ID yang harus di-drop (bisa > 1)
+KOLOM_DROP        <- c()                  # Kolom lain yang ingin di-drop
+RASIO_SPLIT       <- 0.80                 # Rasio train:test
+KFOLD             <- 5                    # Jumlah fold cross-validation
+SEED              <- 123                  # Random seed
+NIM               <- "222312994"          # NIM untuk nama file output
+
+# Pilih SATU algoritma: "rpart","nb","kknn","svmRadial","nnet","rbf","rf","xgbTree"
+ALGORITMA         <- "nb"
+
+# Pilih metode split: "stratified", "random", "timeseries"
+METODE_SPLIT      <- "stratified"
+
+# Kolom tanggal (kosongkan "" jika tidak ada / ingin di-skip)
+KOLOM_TANGGAL     <- ""
+
+# ╔══════════════════════════════════════════════════════════════╗
+# ║  KONFIGURASI PREPROCESSING (sesuaikan saat ujian)          ║
+# ╚══════════════════════════════════════════════════════════════╝
+
+# Kolom yang HARUS jadi numerik (hapus karakter "Rp", ".", dll)
+KOLOM_NUMERIK <- c()
+# Contoh: c("applicant_income", "loan_amount", "term")
+
+# Kolom yang HARUS jadi factor/kategorik
+KOLOM_FACTOR <- c()
+# Contoh: c("gender", "married", "education", "credit_history")
+
+# Koreksi manual: list(kolom = c(salah = benar))
+KOREKSI_MANUAL <- list()
+# Contoh: list(statusnikah = c("2.7" = "3"), gender = c("m" = "Male"))
+```
+
+------------------------------------------------------------------------
+
+# 📦 BAGIAN 1: SETUP & IMPORT
+
+```{r 1-setup, message=FALSE, warning=FALSE}
+# Load library
+library(tidyverse); library(janitor); library(lubridate)
+library(caret); library(knitr); library(pander)
+
+options(scipen = 999)
+
+# Import data
+df_raw <- read.csv(NAMA_FILE_DATA, header = TRUE, 
+                   stringsAsFactors = FALSE, strip.white = FALSE)
+
+cat(sprintf("✅ Data '%s' berhasil dimuat: %d baris × %d kolom\n", 
+            NAMA_FILE_DATA, nrow(df_raw), ncol(df_raw)))
+head(df_raw, 5)
+```
+
+------------------------------------------------------------------------
+
+# 🔍 BAGIAN 2: DATA UNDERSTANDING
+
+```{r 2a-inspeksi}
+cat("══════ DIMENSI & TIPE DATA ══════\n")
+cat(sprintf("Baris: %d | Kolom: %d\n\n", nrow(df_raw), ncol(df_raw)))
+
+cat("Nama Kolom:\n"); print(names(df_raw))
+cat("\nStruktur:\n"); str(df_raw)
+```
+
+```{r 2b-kualitas-data}
+cat("══════ AUDIT KUALITAS DATA ══════\n\n")
+
+# 1. Missing value (termasuk terselubung)
+cek_dirty <- function(x) sum(trimws(x) == "" | trimws(x) %in% c("-","?",".") | is.na(x))
+missing_df <- data.frame(Kolom = names(df_raw), 
+                         Missing = sapply(df_raw, cek_dirty))
+kable(missing_df[missing_df$Missing > 0, ], row.names = FALSE,
+      caption = "Kolom dengan Missing Value")
+
+# 2. Distribusi target
+cat("\nDistribusi Target:\n")
+if(TARGET_COL %in% names(df_raw)) {
+  tbl <- table(df_raw[[TARGET_COL]], useNA = "ifany")
+  print(tbl); cat("\nProporsi:\n"); print(round(prop.table(tbl), 4))
+}
+
+# 3. Statistik numerik
+cat("\nStatistik Kolom Numerik:\n")
+df_num <- df_raw %>% select_if(is.numeric)
+if(ncol(df_num) > 0) pander(summary(df_num))
+```
+
+------------------------------------------------------------------------
+
+# 🧹 BAGIAN 3: PREPROCESSING
+
+## 3A. Standarisasi & Drop Kolom
+
+```{r 3a-standarisasi}
+df_clean <- df_raw %>% clean_names()
+
+# Drop kolom ID
+kolom_hapus <- tolower(gsub("[^a-zA-Z0-9]", "_", c(KOLOM_ID, KOLOM_DROP)))
+for(k in kolom_hapus) {
+  if(k %in% names(df_clean)) df_clean[[k]] <- NULL
+}
+
+cat("Kolom dihapus:", paste(kolom_hapus, collapse=", "), "\n")
+cat("Kolom tersisa:", paste(names(df_clean), collapse=", "), "\n")
+```
+
+## 3B. Bersihkan Missing & Koreksi Manual
+
+```{r 3b-cleaning}
+# Koreksi manual
+for(kol_name in names(KOREKSI_MANUAL)) {
+  if(kol_name %in% names(df_clean)) {
+    peta <- KOREKSI_MANUAL[[kol_name]]
+    for(salah in names(peta)) {
+      df_clean[[kol_name]][df_clean[[kol_name]] == salah] <- peta[[salah]]
+    }
+    cat(sprintf("✅ Koreksi '%s': %s\n", kol_name, 
+                paste(names(peta), "→", peta, collapse=", ")))
+  }
+}
+
+# Bersihkan missing terselubung → NA
+bersihkan_na <- function(x) {
+  if(is.character(x)) {
+    x <- trimws(x)
+    x[x == "" | x %in% c("-","?",".") | tolower(x) == "na"] <- NA
+  }
+  return(x)
+}
+df_clean[] <- lapply(df_clean, bersihkan_na)
+
+cat("\nMissing value per kolom:\n")
+print(colSums(is.na(df_clean)))
+```
+
+## 3C. Type Casting
+
+```{r 3c-casting}
+# Casting numerik
+for(kol in KOLOM_NUMERIK) {
+  if(kol %in% names(df_clean))
+    df_clean[[kol]] <- as.numeric(gsub("[^0-9.-]", "", df_clean[[kol]]))
+}
+
+# Casting factor
+for(kol in KOLOM_FACTOR) {
+  if(kol %in% names(df_clean))
+    df_clean[[kol]] <- as.factor(df_clean[[kol]])
+}
+
+# TARGET wajib factor
+target_clean <- tolower(gsub("[^a-zA-Z0-9]", "_", TARGET_COL))
+if(target_clean %in% names(df_clean))
+  df_clean[[target_clean]] <- as.factor(df_clean[[target_clean]])
+
+# Parsing tanggal (opsional)
+if(nchar(KOLOM_TANGGAL) > 0 && KOLOM_TANGGAL %in% names(df_clean)) {
+  tryCatch({
+    df_clean[[KOLOM_TANGGAL]] <- parse_date_time(
+      tolower(df_clean[[KOLOM_TANGGAL]]), orders = c("dmy","mdy","ymd"))
+    cat(sprintf("✅ Tanggal '%s' berhasil di-parse\n", KOLOM_TANGGAL))
+  }, error = function(e) {
+    cat(sprintf("⚠️ Gagal parse tanggal, drop kolom '%s'\n", KOLOM_TANGGAL))
+    df_clean[[KOLOM_TANGGAL]] <<- NULL
+  })
+}
+
+cat("\nStruktur setelah casting:\n"); str(df_clean)
+```
+
+## 3D. Imputasi & Finalisasi
+
+```{r 3d-finalisasi}
+# Drop baris jika TARGET = NA
+df_clean <- df_clean %>% filter(!is.na(!!sym(target_clean)))
+
+# Ubah sisa character → factor
+df_clean <- df_clean %>% mutate_if(is.character, as.factor)
+
+# Imputasi: numerik → median, kategorik → modus
+modus <- function(x) names(sort(table(x), decreasing = TRUE))[1]
+
+for(kol in names(df_clean)) {
+  if(any(is.na(df_clean[[kol]]))) {
+    if(is.numeric(df_clean[[kol]])) {
+      df_clean[[kol]][is.na(df_clean[[kol]])] <- median(df_clean[[kol]], na.rm = TRUE)
+      cat(sprintf("  Imputasi median: %s\n", kol))
+    } else if(is.factor(df_clean[[kol]])) {
+      df_clean[[kol]][is.na(df_clean[[kol]])] <- modus(df_clean[[kol]])
+      cat(sprintf("  Imputasi modus: %s\n", kol))
+    }
+  }
+}
+
+df_final <- df_clean
+cat(sprintf("\n✅ Dataset final: %d baris × %d kolom\n", nrow(df_final), ncol(df_final)))
+cat("Missing value: "); print(colSums(is.na(df_final)))
+str(df_final)
+```
+
+------------------------------------------------------------------------
+
+# 🤖 BAGIAN 4: PEMODELAN
+
+## 4A. Diagnostik & Splitting
+
+```{r 4a-diagnostik-split}
+# Diagnostik
+n_rows <- nrow(df_final)
+x_data <- df_final %>% dplyr::select(-all_of(target_clean))
+n_num <- sum(sapply(x_data, is.numeric))
+n_cat <- sum(sapply(x_data, is.factor))
+tabel_target <- table(df_final[[target_clean]], useNA = "no")
+rasio <- max(tabel_target) / min(tabel_target)
+is_binary <- length(tabel_target) == 2
+
+cat("════════════════════════════════════════\n")
+cat(" DIAGNOSTIK DATA\n")
+cat("════════════════════════════════════════\n")
+cat(sprintf("Observasi   : %d\n", n_rows))
+cat(sprintf("Prediktor   : %d numerik, %d kategorik\n", n_num, n_cat))
+cat(sprintf("Rasio target: 1:%.1f (%s)\n", rasio, 
+            ifelse(rasio < 2, "Seimbang", "Imbalance")))
+cat(sprintf("Algoritma   : %s\n", toupper(ALGORITMA)))
+cat("════════════════════════════════════════\n")
+
+# Splitting
+set.seed(SEED)
+
+if(METODE_SPLIT == "stratified") {
+  idx <- createDataPartition(df_final[[target_clean]], p = RASIO_SPLIT, list = FALSE)
+} else if(METODE_SPLIT == "timeseries") {
+  batas <- floor(RASIO_SPLIT * n_rows)
+  idx <- 1:batas
+} else {
+  idx <- sample(1:n_rows, size = RASIO_SPLIT * n_rows)
+}
+
+data_train <- df_final[idx, ]
+data_test  <- df_final[-idx, ]
+
+cat(sprintf("\nTrain: %d baris | Test: %d baris\n", nrow(data_train), nrow(data_test)))
+cat("Proporsi train:"); print(prop.table(table(data_train[[target_clean]])))
+cat("Proporsi test: "); print(prop.table(table(data_test[[target_clean]])))
+```
+
+## 4B. Train Control & Model Training
+
+```{r 4b-training, warning=FALSE, message=FALSE}
+# Train control
+if(is_binary) {
+  fungsi_summary <- twoClassSummary
+} else {
+  fungsi_summary <- multiClassSummary
+}
+
+ctrl <- trainControl(method = "cv", number = KFOLD,
+                     classProbs = TRUE, summaryFunction = fungsi_summary)
+
+rumus_model <- as.formula(paste(target_clean, "~ ."))
+
+# Cek apakah perlu scaling
+perlu_scale <- ALGORITMA %in% c("kknn","svmRadial","nnet","rbf","dnn")
+preproc <- if(perlu_scale) c("center","scale","nzv") else NULL
+
+# Khusus XGBoost: pakai pipeline terpisah
+if(ALGORITMA == "xgbTree") {
+  
+  x_tr <- data_train[, names(data_train) != target_clean]
+  y_tr <- data_train[[target_clean]]
+  
+  dummy_xgb <- dummyVars(~ ., data = x_tr, fullRank = TRUE)
+  x_tr_xgb <- as.data.frame(predict(dummy_xgb, newdata = x_tr))
+  names(x_tr_xgb) <- make.names(names(x_tr_xgb), unique = TRUE)
+  
+  nzv <- nearZeroVar(x_tr_xgb)
+  if(length(nzv) > 0) x_tr_xgb <- x_tr_xgb[, -nzv]
+  
+  ctrl_xgb <- trainControl(method = "cv", number = KFOLD,
+                            classProbs = FALSE, summaryFunction = defaultSummary)
+  
+  grid_xgb <- expand.grid(nrounds = c(50,100), max_depth = c(2,3), 
+                           eta = c(0.05,0.1), gamma = 0,
+                           colsample_bytree = 0.8, min_child_weight = 1, subsample = 0.8)
+  
+  set.seed(SEED)
+  model <- train(x = x_tr_xgb, y = y_tr, method = "xgbTree",
+                 trControl = ctrl_xgb, tuneGrid = grid_xgb, 
+                 metric = "Accuracy", verbose = FALSE)
+  
+} else if(ALGORITMA == "nb") {
+  # Naive Bayes: pisahkan x dan y
+  x_tr <- data_train[, names(data_train) != target_clean]
+  y_tr <- data_train[[target_clean]]
+  
+  set.seed(SEED)
+  model <- train(x = x_tr, y = y_tr, method = "nb",
+                 trControl = ctrl, tuneLength = 3)
+  
+} else if(ALGORITMA %in% c("nnet")) {
+  set.seed(SEED)
+  model <- train(rumus_model, data = data_train, method = ALGORITMA,
+                 trControl = ctrl, preProcess = "range",
+                 tuneLength = 3, trace = FALSE, maxit = 500, MaxNWts = 10000)
+  
+} else if(ALGORITMA %in% c("rbf","dnn")) {
+  extra_args <- list()
+  if(ALGORITMA == "dnn") extra_args$numepochs <- 50
+  
+  set.seed(SEED)
+  model <- do.call(train, c(list(form = rumus_model, data = data_train, 
+                                  method = ALGORITMA, trControl = ctrl,
+                                  preProcess = "range", tuneLength = 3), extra_args))
+} else {
+  set.seed(SEED)
+  model <- train(rumus_model, data = data_train, method = ALGORITMA,
+                 trControl = ctrl, preProcess = preproc, tuneLength = 5)
+}
+
+cat("════════════════════════════════════════\n")
+cat(sprintf(" HASIL TRAINING: %s\n", toupper(ALGORITMA)))
+cat("════════════════════════════════════════\n")
+print(model)
+```
+
+------------------------------------------------------------------------
+
+# 📊 BAGIAN 5: EVALUASI
+
+## 5A. Confusion Matrix & Metrik
+
+```{r 5a-evaluasi, warning=FALSE}
+# Prediksi
+if(ALGORITMA == "xgbTree") {
+  x_te <- data_test[, names(data_test) != target_clean]
+  x_te_xgb <- as.data.frame(predict(dummy_xgb, newdata = x_te))
+  names(x_te_xgb) <- make.names(names(x_te_xgb), unique = TRUE)
+  if(length(nzv) > 0) x_te_xgb <- x_te_xgb[, names(x_tr_xgb)]
+  pred_class <- predict(model, newdata = x_te_xgb)
+} else {
+  pred_class <- predict(model, newdata = data_test)
+}
+
+kelas_positif <- levels(data_test[[target_clean]])[1]
+
+eval_cm <- confusionMatrix(data = pred_class, 
+                           reference = data_test[[target_clean]],
+                           positive = kelas_positif, mode = "everything")
+
+cat("════════════════════════════════════════\n")
+cat(" CONFUSION MATRIX\n")
+cat("════════════════════════════════════════\n")
+print(eval_cm$table)
+
+cat(sprintf("\n Accuracy : %.2f%%\n", eval_cm$overall["Accuracy"] * 100))
+cat(sprintf(" Kappa    : %.4f\n", eval_cm$overall["Kappa"]))
+
+if(rasio >= 2) {
+  cat("\n⚠️ DATA IMBALANCE → Fokus pada F1 & Recall:\n")
+} else {
+  cat("\n✅ DATA SEIMBANG → Accuracy valid sebagai metrik utama:\n")
+}
+
+cat(sprintf(" Recall    : %.4f\n", eval_cm$byClass["Sensitivity"]))
+cat(sprintf(" Precision : %.4f\n", eval_cm$byClass["Pos Pred Value"]))
+cat(sprintf(" F1-Score  : %.4f\n", eval_cm$byClass["F1"]))
+cat(sprintf(" Specificity: %.4f\n", eval_cm$byClass["Specificity"]))
+```
+
+## 5B. Kurva ROC (Biner)
+
+```{r 5b-roc, fig.width=6, fig.height=5, warning=FALSE, message=FALSE}
+if(is_binary && ALGORITMA != "xgbTree") {
+  library(pROC)
+  pred_prob <- predict(model, newdata = data_test, type = "prob")
+  roc_obj <- roc(response = data_test[[target_clean]], 
+                 predictor = pred_prob[[kelas_positif]])
+  cat(sprintf("AUC: %.4f\n", auc(roc_obj)))
+  plot(roc_obj, col = "blue", lwd = 2, print.auc = TRUE, print.auc.y = 0.4,
+       main = paste("Kurva ROC -", toupper(ALGORITMA)))
+} else {
+  cat("ROC tidak tersedia untuk konfigurasi ini.\n")
+}
+```
+
+## 5C. Variable Importance
+
+```{r 5c-varimp, fig.width=7, fig.height=5, warning=FALSE}
+tryCatch({
+  var_imp <- varImp(model, scale = TRUE)
+  print(var_imp)
+  plot(var_imp, top = 10, main = paste("Top 10 Variabel -", toupper(ALGORITMA)))
+}, error = function(e) {
+  cat("Variable importance tidak tersedia untuk algoritma ini.\n")
+})
+```
+
+------------------------------------------------------------------------
+
+# 🔮 BAGIAN 6: PREDIKSI DATA BARU
+
+```{r 6-prediksi, warning=FALSE}
+if(nchar(NAMA_FILE_PREDIK) > 0 && file.exists(NAMA_FILE_PREDIK)) {
+  
+  # 6A. Import
+  data_predik_raw <- read.csv(NAMA_FILE_PREDIK, stringsAsFactors = FALSE)
+  cat(sprintf("✅ Data prediksi: %d baris × %d kolom\n", 
+              nrow(data_predik_raw), ncol(data_predik_raw)))
+  
+  # 6B. Simpan ID & standarisasi
+  data_predik <- data_predik_raw %>% clean_names()
+  kolom_id_clean <- tolower(gsub("[^a-zA-Z0-9]", "_", KOLOM_ID))
+  
+  data_predik_model <- data_predik
+  for(k in kolom_id_clean) {
+    if(k %in% names(data_predik_model)) data_predik_model[[k]] <- NULL
+  }
+  
+  # 6C. Samakan kolom
+  kolom_prediktor <- setdiff(names(df_final), target_clean)
+  kolom_lebih <- setdiff(names(data_predik_model), kolom_prediktor)
+  if(length(kolom_lebih) > 0) {
+    data_predik_model <- data_predik_model[, !(names(data_predik_model) %in% kolom_lebih)]
+  }
+  data_predik_model <- data_predik_model[, kolom_prediktor]
+  
+  # 6D. Samakan tipe data
+  for(kolom in names(data_predik_model)) {
+    if(is.factor(df_final[[kolom]])) {
+      data_predik_model[[kolom]] <- factor(data_predik_model[[kolom]], 
+                                           levels = levels(df_final[[kolom]]))
+    }
+    if(is.numeric(df_final[[kolom]])) {
+      data_predik_model[[kolom]] <- as.numeric(data_predik_model[[kolom]])
+    }
+  }
+  
+  # 6E. Imputasi
+  for(kolom in names(data_predik_model)) {
+    if(any(is.na(data_predik_model[[kolom]]))) {
+      if(is.numeric(data_predik_model[[kolom]])) {
+        data_predik_model[[kolom]][is.na(data_predik_model[[kolom]])] <- 
+          median(df_final[[kolom]], na.rm = TRUE)
+      } else if(is.factor(data_predik_model[[kolom]])) {
+        data_predik_model[[kolom]][is.na(data_predik_model[[kolom]])] <- 
+          modus(df_final[[kolom]])
+        data_predik_model[[kolom]] <- factor(data_predik_model[[kolom]], 
+                                             levels = levels(df_final[[kolom]]))
+      }
+    }
+  }
+  
+  # 6F. Latih ulang model final dengan SELURUH data
+  set.seed(SEED)
+  if(ALGORITMA == "nb") {
+    x_all <- df_final[, names(df_final) != target_clean]
+    y_all <- df_final[[target_clean]]
+    model_final <- train(x = x_all, y = y_all, method = "nb",
+                         trControl = ctrl, tuneLength = 3)
+  } else if(ALGORITMA == "xgbTree") {
+    model_final <- model  # XGBoost pakai model sebelumnya
+  } else {
+    model_final <- train(rumus_model, data = df_final, method = ALGORITMA,
+                         trControl = ctrl, preProcess = preproc, tuneLength = 5)
+  }
+  
+  # 6G. Prediksi
+  if(ALGORITMA == "xgbTree") {
+    x_pred_xgb <- as.data.frame(predict(dummy_xgb, newdata = data_predik_model))
+    names(x_pred_xgb) <- make.names(names(x_pred_xgb), unique = TRUE)
+    prediksi_status <- predict(model_final, newdata = x_pred_xgb)
+  } else {
+    prediksi_status <- predict(model_final, newdata = data_predik_model)
+  }
+  
+  cat("\n════════════════════════════════════════\n")
+  cat(" HASIL PREDIKSI DATA BARU\n")
+  cat("════════════════════════════════════════\n")
+  print(table(prediksi_status))
+  
+  # 6H. Export
+  hasil_output <- data_predik_raw
+  hasil_output[[TARGET_COL]] <- prediksi_status
+  
+  nama_file_output <- sprintf("hasil_prediksi_%s.csv", NIM)
+  write.csv(hasil_output, file = nama_file_output, row.names = FALSE)
+  cat(sprintf("\n✅ File disimpan: %s\n", nama_file_output))
+  head(hasil_output)
+  
+} else {
+  cat("ℹ️ Tidak ada file prediksi atau NAMA_FILE_PREDIK kosong. Bagian ini di-skip.\n")
+}
+```
+
+------------------------------------------------------------------------
+
+# 📝 PANDUAN NARASI ESAI
+
+> Gunakan template di bawah ini untuk menulis narasi analisis di lembar jawaban.
+
+**Confusion Matrix:** "Berdasarkan Confusion Matrix, model berhasil memprediksi benar [TP] kasus Positif dan [TN] kasus Negatif. Terdapat [FP] kasus salah tuduh dan [FN] kasus kecolongan."
+
+**Accuracy (data seimbang):** "Akurasi model mencapai [Acc]%, valid sebagai metrik utama karena proporsi kelas target seimbang."
+
+**F1/Recall (data imbalance):** "Karena data imbalanced, evaluasi difokuskan pada F1-Score = [F1] dan Recall = [Recall]%. Tingginya Recall menunjukkan model mampu mendeteksi hampir seluruh target [kelas]."
+
+**Kappa:** "Nilai Kappa = [κ] memastikan akurasi model bukan kebetulan."
+
+**AUC-ROC:** "AUC = [AUC] menunjukkan kemampuan model membedakan kelas Positif dan Negatif. \>0.9 Sangat Baik, \>0.8 Baik, \>0.7 Cukup."
+
+**Variable Importance:** "Fitur paling berpengaruh adalah [var1] (skor 100%), disusul [var2] dan [var3]."
